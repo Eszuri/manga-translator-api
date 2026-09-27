@@ -44,7 +44,6 @@ for idx, img_path in enumerate(images, 1):
             
         stem = os.path.splitext(fname)[0]
         out.save(os.path.join(OUTPUT_DIR, f"out_{stem}.png"))
-        out.save(os.path.join(OUTPUT_DIR, f"out_{fname}.png"))
 
     except Exception as e:
         print(f"[{idx:02d}/{len(images)}] {fname} -> ERROR: {e}")
