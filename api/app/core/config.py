@@ -25,5 +25,12 @@ class Settings(BaseModel):
     SUPPORTED_SOURCE_LANGS: List[str] = ["ja", "ko", "zh", "en"]
     SUPPORTED_TARGET_LANGS: List[str] = ["id", "en"]
 
+    # Translation Engine (OpenAI-Compatible: OpenAI, Groq, OpenRouter, DeepSeek, Ollama, etc.)
+    LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
+    LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
+    DEFAULT_TARGET_LANG: str = os.getenv("DEFAULT_TARGET_LANG", "id")
+    LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "30.0"))
+
 
 settings = Settings()

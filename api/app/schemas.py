@@ -40,6 +40,10 @@ class DetectedBubble(BaseModel):
         default=None,
         description="Extracted Japanese dialogue text from Manga OCR"
     )
+    translation: Optional[str] = Field(
+        default=None,
+        description="Translated dialogue text into target language (default: Indonesian)"
+    )
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Detection confidence score")
     direction: Literal["vertical", "horizontal"] = Field(
         default="vertical", 
@@ -61,5 +65,35 @@ class DetectBubblesResponse(BaseModel):
         default="rtl", 
         description="'rtl' (Right-to-Left for Japanese Manga) or 'ltr' (Left-to-Right for Manhwa)"
     )
+    target_lang: Optional[str] = Field(
+        default=None,
+        description="Target language code for dialogue translation (e.g. 'id', 'en')"
+    )
     bubbles: List[DetectedBubble] = Field(default_factory=list)
     processing_time_ms: float
+
+
+class DialogueItem(BaseModel):
+    id: int = Field(..., description="Speech bubble index ID")
+    text: str = Field(..., description="Original Japanese text")
+
+
+class TranslateDialoguesRequest(BaseModel):
+    dialogues: List[DialogueItem] = Field(..., description="List of dialogues to translate in reading order")
+    target_lang: str = Field(default="id", description="Target language code ('id' for Indonesian, 'en' for English)")
+    context: Optional[str] = Field(default=None, description="Optional scene context or manga genre info")
+
+
+class TranslatedDialogueItem(BaseModel):
+    id: int
+    original_text: str
+    translated_text: str
+
+
+class TranslateDialoguesResponse(BaseModel):
+    success: bool = True
+    target_lang: str
+    dialogues: List[TranslatedDialogueItem] = Field(default_factory=list)
+    processing_time_ms: float
+    model: str
+

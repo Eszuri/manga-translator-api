@@ -8,6 +8,7 @@ from app.services.detector import (
 from app.services.comic_text_detector import ComicTextDetector
 from app.services.hybrid_detector import HybridBubbleDetector
 from app.services.ocr_service import MangaOcrService, get_ocr_service
+from app.services.translation_service import MangaTranslationService, get_translation_service
 
 __all__ = [
     "BaseBubbleDetector",
@@ -16,6 +17,8 @@ __all__ = [
     "HybridBubbleDetector",
     "MangaOcrService",
     "get_ocr_service",
+    "MangaTranslationService",
+    "get_translation_service",
     "sort_manga_reading_order",
     "calculate_iou"
 ]
