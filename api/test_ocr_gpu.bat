@@ -1,17 +1,17 @@
 @echo off
 REM ========================================================
-REM PENGUJIAN MANGA OCR KHUSUS GPU (DirectML)
+REM MANGA OCR TEST - GPU (DirectML)
 REM ========================================================
 echo ========================================================
-echo  MENJALANKAN DETEKSI + MANGA OCR DENGAN GPU (DirectML)
+echo  RUNNING DETECTION (HYBRID) + MANGA OCR WITH GPU
 echo ========================================================
 
 "..\.venv-gpu\Scripts\python.exe" batch_test_ocr.py --limit 80 --detector hybrid --device gpu %*
 if %ERRORLEVEL% NEQ 0 (
-    echo [GAGAL] Pengujian OCR GPU mengalami kendala.
+    echo [FAILED] OCR test on GPU encountered an error.
     exit /b %ERRORLEVEL%
 )
 
 echo.
-echo [SUKSES] Pengujian OCR GPU selesai dan berhasil!
+echo [SUCCESS] OCR test on GPU completed successfully!
 if "%~1"=="" pause

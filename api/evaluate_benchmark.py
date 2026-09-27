@@ -112,7 +112,7 @@ def main():
         target_images = splits["development_validation"] + splits["holdout_test"]
 
     print("=" * 75)
-    print(f"EVALUASI BENCHMARK: Detektor '{args.detector}' pada Split '{args.split}' ({len(target_images)} Halaman)")
+    print(f"BENCHMARK EVALUATION: Detector '{args.detector}' on Split '{args.split}' ({len(target_images)} Pages)")
     print("=" * 75)
 
     # Instantiate detector
@@ -127,7 +127,7 @@ def main():
         detector = ContourBubbleDetector()
         eval_text = False
 
-    print(f"Inisialisasi detektor selesai dalam {time.time() - t0_init:.2f}s.\n")
+    print(f"Detector initialization completed in {time.time() - t0_init:.2f}s.\n")
 
     total_tp = 0
     total_fp = 0
@@ -135,13 +135,13 @@ def main():
     page_ious = []
     total_time = 0.0
 
-    print(f"{'Halaman':<12} | {'GT':<4} | {'Det':<4} | {'TP':<4} | {'FP':<4} | {'FN':<4} | {'IoU':<6} | {'Waktu'}")
+    print(f"{'Page':<12} | {'GT':<4} | {'Det':<4} | {'TP':<4} | {'FP':<4} | {'FN':<4} | {'IoU':<6} | {'Time'}")
     print("-" * 75)
 
     for img_name in target_images:
         img_path = os.path.join(IMAGE_DIR, img_name)
         if not os.path.exists(img_path):
-            print(f"{img_name:<12} | [File gambar tidak ditemukan]")
+            print(f"{img_name:<12} | [Image file not found]")
             continue
 
         gt_page = data["annotations"].get(img_name)
@@ -173,15 +173,15 @@ def main():
     overall_mean_iou = sum(page_ious) / len(page_ious) if page_ious else 0.0
 
     print("-" * 75)
-    print("RINGKASAN HASIL EVALUASI:")
+    print("EVALUATION SUMMARY:")
     print(f"  * Total True Positives  (TP) : {total_tp}")
-    print(f"  * Total False Positives (FP) : {total_fp} (salah deteksi)")
-    print(f"  * Total False Negatives (FN) : {total_fn} (balon terlewat)")
+    print(f"  * Total False Positives (FP) : {total_fp} (false alarms)")
+    print(f"  * Total False Negatives (FN) : {total_fn} (missed bubbles)")
     print(f"  * Precision                  : {precision * 100:.1f}%")
     print(f"  * Recall                     : {recall * 100:.1f}%")
     print(f"  * F1-Score                   : {f1 * 100:.1f}%")
     print(f"  * Mean Matched IoU           : {overall_mean_iou:.3f}")
-    print(f"  * Rata-rata waktu per halaman: {total_time / max(1, len(target_images)):.1f} ms")
+    print(f"  * Average time per page      : {total_time / max(1, len(target_images)):.1f} ms")
     print("=" * 75)
 
 

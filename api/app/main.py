@@ -5,7 +5,7 @@ from app.api.v1.router import api_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    description="Backend API untuk Manga Translator Browser Extension. Langkah 1: Setup fondasi server, CORS, dan health check.",
+    description="Backend API for Manga Translator Browser Extension (Speech Bubble Detection, Manga-OCR, & Translation).",
     version=settings.VERSION,
     docs_url="/docs",
     redoc_url="/redoc"

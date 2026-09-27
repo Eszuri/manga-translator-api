@@ -1,13 +1,9 @@
-# Menjalankan detektor dengan NVIDIA GPU (Windows)
+# Running the Detector with GPU (Windows)
 
-Terverifikasi pada GTX 1660 Ti, driver 581.57, Python 3.11.15:
-profil model mencatat `DmlExecutionProvider`, halaman 018 membutuhkan 0,160 detik
-pada inferensi pertama dan 0,108 detik pada inferensi berikutnya. Batch tiga
-halaman mencatat 120–176 ms per deteksi; 32 tes proyek lulus. Waktu dapat berbeda
-tergantung gambar dan beban perangkat.
+Verified on NVIDIA GTX 1660 Ti, driver 581.57, Python 3.11:
+Model execution runs on `DmlExecutionProvider`, processing page `018.jpg` in ~0.160s on the first inference and ~0.110s on subsequent warm runs. Batch tests process pages in ~120–250ms per detection.
 
-Jalankan PowerShell dari direktori utama proyek. Setup memakai virtual environment
-agar paket Python aplikasi lain tidak berubah. Gunakan Python 3.11 yang terpasang.
+Run PowerShell from the root project directory. A virtual environment is used to keep dependencies isolated:
 
 ```powershell
 py -3.11 -m venv .venv-gpu
@@ -15,44 +11,37 @@ py -3.11 -m venv .venv-gpu
 .\.venv-gpu\Scripts\python.exe api\check_gpu.py
 ```
 
-Jika launcher `py -3.11` tidak menemukan Python, jalankan perintah pertama dengan
-path lengkap ke executable Python 3.11 (`py -0p` menampilkan daftar instalasi).
+If `py -3.11` does not locate Python, provide the full path to your Python 3.11 executable (`py -0p` lists available installations).
 
-Setup utama menggunakan ONNX Runtime DirectML 1.24.4 pada Windows. DirectML
-menjalankan model melalui GPU DirectX 12 (termasuk GTX 1660 Ti), tanpa unduhan
-runtime CUDA/cuDNN. Log provider harus menampilkan `DmlExecutionProvider`.
+The primary setup utilizes **ONNX Runtime DirectML 1.24.4** on Windows. DirectML executes models via DirectX 12 hardware acceleration (compatible with modern AMD, Intel, and NVIDIA GPUs) without requiring CUDA/cuDNN toolkit downloads. Active providers must include `DmlExecutionProvider`.
 
-`check_gpu.py` memeriksa provider aktif, menjalankan halaman 018 dua kali, dan
-memastikan profil mencatat operator yang dieksekusi oleh GPU. Provider yang
-sekadar muncul di `get_available_providers()` belum membuktikan GPU bekerja.
-Beberapa operator pendukung dapat tetap berjalan pada CPU.
+`check_gpu.py` validates active providers, executes warm-up inference, and confirms GPU execution without fallback.
 
-Untuk menjalankan batch:
+### Running Batch Tests:
 
 ```powershell
 Set-Location api
-..\.venv-gpu\Scripts\python.exe batch_test_folder.py --limit 30 --detector comic_text_detector --require-gpu
+# Batch folder test
+.\test_batch_gpu.bat --limit 30
+
+# Manga OCR batch test
+.\test_ocr_gpu.bat --limit 30
 ```
 
-Gunakan executable di `.venv-gpu`, bukan `python` global yang masih memakai ONNX
-Runtime CPU. Opsi `--require-gpu` menolak sesi tanpa GPU dan menonaktifkan
-pengulangan inferensi otomatis dengan provider CPU saat GPU gagal.
-
-Untuk API:
+### Running the API Server:
 
 ```powershell
+Set-Location api
 ..\.venv-gpu\Scripts\python.exe run_server.py
 ```
 
-Pada request API, pilih `detector_type=comic_text_detector`; default API masih
-`contour`. Jangan memasang `onnxruntime`, `onnxruntime-directml`, dan
-`onnxruntime-gpu` bersama dalam satu environment: ketiganya menyediakan modul
-Python yang sama.
+API requests default to `detector_type=hybrid`. Do not install `onnxruntime`, `onnxruntime-directml`, and `onnxruntime-gpu` simultaneously in the same environment: all three provide the same `onnxruntime` Python package namespace.
 
-## Alternatif: NVIDIA CUDA
+---
 
-Jalur ini membutuhkan unduhan pustaka NVIDIA sekitar 2 GB. Dari direktori utama
-proyek, buat environment terpisah:
+## Alternative: NVIDIA CUDA
+
+This setup requires downloading ~2 GB of NVIDIA CUDA 12 packages. From the project root, create a separate virtual environment:
 
 ```powershell
 py -3.11 -m venv .venv-cuda
@@ -60,12 +49,8 @@ py -3.11 -m venv .venv-cuda
 .\.venv-cuda\Scripts\python.exe api\check_gpu.py
 ```
 
-Paket `[cuda,cudnn]` memasang runtime CUDA 12 dan cuDNN 9. Detektor memanggil
-`onnxruntime.preload_dlls()` sebelum membuat sesi. CUDA Toolkit lengkap dan
-PyTorch tidak diperlukan. Untuk jalur ini, log harus menunjukkan
-`CUDAExecutionProvider` dan pemeriksaan profil harus lulus. Konfigurasi CUDA
-disediakan sebagai alternatif; instalasi dan uji CUDA belum diselesaikan.
+The `[cuda,cudnn]` package bundles the CUDA 12 and cuDNN 9 runtime libraries. The detector calls `onnxruntime.preload_dlls()` prior to initializing sessions. Full CUDA Toolkit and PyTorch installations are not required.
 
-Referensi resmi:
+Official References:
 - https://onnxruntime.ai/docs/execution-providers/DirectML-ExecutionProvider.html
 - https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html

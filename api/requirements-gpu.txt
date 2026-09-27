@@ -1,13 +1,7 @@
 -r requirements.txt
-Pillow>=10
-numpy>=1.26
-opencv-python-headless>=4.10
-python-multipart>=0.0.18
-huggingface-hub>=0.27
-# Windows GPU acceleration without the CUDA toolkit/runtime download.
+# Windows GPU acceleration (DirectX 12 / DirectML) without CUDA runtime download.
 onnxruntime-directml==1.24.4
 # Manga OCR (ViT + RoBERTa Transformer)
 manga-ocr-torchless>=0.2.0
 sentencepiece>=0.2.0
 jaconv>=0.3.4
-

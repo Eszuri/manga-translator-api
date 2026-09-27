@@ -78,7 +78,7 @@ def get_detector(detector_type: str, device: str = "auto", require_gpu: bool = F
         )
         print(f"[INFO] Target Device: {detector.device_name}")
         if detector.target_device == "gpu":
-            print("[INFO] CPU Fallback : Disabled (Inference 100% terkunci di GPU)")
+            print("[INFO] CPU Fallback : Disabled (Inference 100% locked to GPU)")
         return detector
     elif detector_type == "hybrid":
         from app.services.hybrid_detector import HybridBubbleDetector
@@ -92,7 +92,7 @@ def get_detector(detector_type: str, device: str = "auto", require_gpu: bool = F
         detector = HybridBubbleDetector(comic_detector=comic_det, num_threads=4)
         print(f"[INFO] Target Device: {comic_det.device_name}")
         if comic_det.target_device == "gpu":
-            print("[INFO] CPU Fallback : Disabled (Inference 100% terkunci di GPU)")
+            print("[INFO] CPU Fallback : Disabled (Inference 100% locked to GPU)")
         return detector
     else:
         print("[INFO] Initializing ContourBubbleDetector (Fast OpenCV Heuristic)...")

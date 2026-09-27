@@ -3,10 +3,10 @@ from pydantic import BaseModel, Field
 
 
 class BoundingBox(BaseModel):
-    x: int = Field(..., description="Koordinat X sudut kiri-atas (piksel)", ge=0)
-    y: int = Field(..., description="Koordinat Y sudut kiri-atas (piksel)", ge=0)
-    width: int = Field(..., description="Lebar kotak (piksel)", gt=0)
-    height: int = Field(..., description="Tinggi kotak (piksel)", gt=0)
+    x: int = Field(..., description="Top-left X coordinate (pixels)", ge=0)
+    y: int = Field(..., description="Top-left Y coordinate (pixels)", ge=0)
+    width: int = Field(..., description="Box width (pixels)", gt=0)
+    height: int = Field(..., description="Box height (pixels)", gt=0)
 
     @property
     def center_x(self) -> float:
@@ -30,25 +30,25 @@ class BoundingBox(BaseModel):
 
 
 class DetectedBubble(BaseModel):
-    id: int = Field(..., description="Nomor urut balon kata sesuai urutan baca")
+    id: int = Field(..., description="Speech bubble index in reading order")
     bounding_box: BoundingBox
     text_box: Optional[BoundingBox] = Field(
         default=None, 
-        description="Koordinat kotak teks di dalam balon (terpisah dari batas balon)"
+        description="Inner text envelope coordinates inside the speech bubble"
     )
     text: Optional[str] = Field(
         default=None,
-        description="Teks dialog hasil ekstraksi Manga OCR"
+        description="Extracted Japanese dialogue text from Manga OCR"
     )
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Tingkat kepercayaan deteksi")
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Detection confidence score")
     direction: Literal["vertical", "horizontal"] = Field(
         default="vertical", 
-        description="Estimasi orientasi teks ('vertical' untuk Manga Jepang, 'horizontal' untuk Manhwa)"
+        description="Estimated text reading orientation ('vertical' for Manga, 'horizontal' for Manhwa)"
     )
-    aspect_ratio: float = Field(..., description="Rasio tinggi / lebar kotak (height / width)")
+    aspect_ratio: float = Field(..., description="Height-to-width ratio (height / width)")
     detector_type: Optional[str] = Field(
-        default="contour", 
-        description="Tipe detektor yang mendeteksi ('contour', 'comic_text_detector', 'hybrid')"
+        default="hybrid", 
+        description="Detector engine used ('hybrid', 'comic_text_detector', 'contour')"
     )
 
 
@@ -59,7 +59,7 @@ class DetectBubblesResponse(BaseModel):
     total_detected: int
     reading_direction: Literal["rtl", "ltr"] = Field(
         default="rtl", 
-        description="'rtl' (Kanan-ke-Kiri untuk Manga) atau 'ltr' (Kiri-ke-Kanan untuk Manhwa)"
+        description="'rtl' (Right-to-Left for Japanese Manga) or 'ltr' (Left-to-Right for Manhwa)"
     )
     bubbles: List[DetectedBubble] = Field(default_factory=list)
     processing_time_ms: float

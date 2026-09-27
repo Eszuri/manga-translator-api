@@ -38,37 +38,37 @@ def get_detector_instance(detector_type: str, device: str):
 
 class CropOCRResponse(BaseModel):
     success: bool = True
-    text: str = Field(..., description="Teks hasil ekstraksi Manga OCR")
+    text: str = Field(..., description="Extracted Japanese dialogue text from Manga OCR")
     processing_time_ms: float
 
 
 @router.post("/recognize", response_model=DetectBubblesResponse)
 async def recognize_page_text(
-    file: UploadFile = File(..., description="Gambar halaman manga (JPEG, PNG, WebP)"),
+    file: UploadFile = File(..., description="Manga page image file (JPEG, PNG, WebP)"),
     detector_type: Literal["hybrid", "comic_text_detector", "contour"] = Form(
         "hybrid",
-        description="Detektor teks/balon ('hybrid' direkomendasikan untuk akurasi optimal)"
+        description="Text/bubble detector engine ('hybrid' recommended for optimal accuracy)"
     ),
     reading_direction: Literal["rtl", "ltr"] = Form(
         "rtl",
-        description="Arah baca ('rtl' untuk Manga Jepang, 'ltr' untuk Manhwa)"
+        description="Reading direction ('rtl' for Japanese Manga, 'ltr' for Manhwa)"
     ),
     device: Literal["auto", "gpu", "cpu"] = Form(
         "auto",
-        description="Perangkat komputasi: 'gpu' (DirectML), 'cpu', atau 'auto'"
+        description="Compute device: 'gpu' (DirectML), 'cpu', or 'auto'"
     )
 ):
     """
-    Ekstraksi teks lengkap pada satu halaman manga:
-    1. Mendeteksi letak balon kata dan area teks secara otomatis.
-    2. Mengurutkan balon berdasarkan kaidah baca manga (RTL).
-    3. Memotong setiap area teks dan mengekstrak teks Jepang menggunakan Manga-OCR (ViT).
+    Full-page text extraction for a manga page:
+    1. Automatically detects speech bubble and text areas.
+    2. Sorts bubbles according to comic reading order (RTL/LTR).
+    3. Crops each text region and extracts Japanese text using Manga-OCR (ViT).
     """
     allowed_types = ["image/jpeg", "image/png", "image/webp", "application/octet-stream"]
     if file.content_type not in allowed_types:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Format file '{file.content_type}' tidak didukung. Gunakan JPEG, PNG, atau WebP."
+            detail=f"File format '{file.content_type}' is not supported. Please use JPEG, PNG, or WebP."
         )
 
     try:
@@ -76,7 +76,7 @@ async def recognize_page_text(
         if not contents:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File gambar yang diunggah kosong."
+                detail="Uploaded image file is empty."
             )
         image = Image.open(io.BytesIO(contents))
         image.load()
@@ -85,19 +85,19 @@ async def recognize_page_text(
             raise e
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Gagal memproses file gambar: {str(e)}"
+            detail=f"Failed to process image file: {str(e)}"
         )
 
     start_time = time.perf_counter()
 
-    # 1. Deteksi balon kata
+    # 1. Detect speech bubbles
     detector = get_detector_instance(detector_type, device)
     detected = detector.detect(image)
 
-    # 2. Urutkan berdasarkan arah baca
+    # 2. Sort into reading order
     ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
 
-    # 3. Jalankan Manga-OCR pada setiap teks yang terdeteksi
+    # 3. Run Manga-OCR on each detected bubble
     ocr_service = get_ocr_service(device=device)
     ordered_bubbles = ocr_service.recognize_all_bubbles(image, ordered_bubbles)
 
@@ -116,20 +116,20 @@ async def recognize_page_text(
 
 @router.post("/recognize-crop", response_model=CropOCRResponse)
 async def recognize_crop_text(
-    file: UploadFile = File(..., description="Gambar potongan teks (crop) dari seleksi user"),
+    file: UploadFile = File(..., description="Cropped text image (manual box selection from extension)"),
     device: Literal["auto", "gpu", "cpu"] = Form(
         "auto",
-        description="Perangkat komputasi: 'gpu' (DirectML), 'cpu', atau 'auto'"
+        description="Compute device: 'gpu' (DirectML), 'cpu', or 'auto'"
     )
 ):
     """
-    Ekstraksi teks langsung dari potongan gambar (fitur seleksi manual / drag box dari extension).
+    Extract text directly from a cropped image (extension manual box selection feature).
     """
     allowed_types = ["image/jpeg", "image/png", "image/webp", "application/octet-stream"]
     if file.content_type not in allowed_types:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Format file '{file.content_type}' tidak didukung. Gunakan JPEG, PNG, atau WebP."
+            detail=f"File format '{file.content_type}' is not supported. Please use JPEG, PNG, or WebP."
         )
 
     try:
@@ -137,7 +137,7 @@ async def recognize_crop_text(
         if not contents:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File gambar crop yang diunggah kosong."
+                detail="Uploaded cropped image file is empty."
             )
         crop_img = Image.open(io.BytesIO(contents))
         crop_img.load()
@@ -146,7 +146,7 @@ async def recognize_crop_text(
             raise e
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Gagal memproses gambar crop: {str(e)}"
+            detail=f"Failed to process cropped image: {str(e)}"
         )
 
     start_time = time.perf_counter()

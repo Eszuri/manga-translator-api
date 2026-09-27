@@ -73,31 +73,31 @@ def main():
             images = images[:args.limit]
 
     print("=" * 65)
-    print("MANGA DETEKSI & OCR BATCH TEST (LANGKAH 3)")
-    print(f"Perangkat Komputasi : {args.device.upper()}")
-    print(f"Tipe Detektor       : {args.detector.upper()}")
-    print(f"Jumlah Halaman      : {len(images)}")
+    print("MANGA DETECTION & OCR BATCH TEST (STEP 3)")
+    print(f"Compute Device     : {args.device.upper()}")
+    print(f"Detector Engine    : {args.detector.upper()}")
+    print(f"Total Pages        : {len(images)}")
     print("=" * 65)
 
-    print(f"\n[1] Inisialisasi Detektor ({args.detector})...")
+    print(f"\n[1] Initializing Detector ({args.detector})...")
     if args.detector == "comic_text_detector":
         detector = ComicTextDetector(device=args.device, require_gpu=(args.device == "gpu"))
-        print(f"    -> Detektor Aktif pada: {detector.device_name}")
+        print(f"    -> Detector Active on: {detector.device_name}")
     elif args.detector == "hybrid":
         comic_det = ComicTextDetector(device=args.device, require_gpu=(args.device == "gpu"))
         detector = HybridBubbleDetector(comic_detector=comic_det)
-        print(f"    -> Detektor Aktif pada: {comic_det.device_name}")
+        print(f"    -> Detector Active on: {comic_det.device_name}")
     else:
         from app.services.detector import ContourBubbleDetector
         detector = ContourBubbleDetector()
-        print("    -> Detektor Aktif pada: CPU (OpenCV Pipeline)")
+        print("    -> Detector Active on: CPU (OpenCV Pipeline)")
 
-    print("\n[2] Inisialisasi Manga-OCR Service (ViT + RoBERTa Transformer)...")
+    print("\n[2] Initializing Manga-OCR Service (ViT + RoBERTa Transformer)...")
     ocr_service = get_ocr_service(device=args.device, require_gpu=(args.device == "gpu"))
-    print(f"    -> OCR Engine Aktif pada: {ocr_service.device_name}")
+    print(f"    -> OCR Engine Active on: {ocr_service.device_name}")
 
     print("\n" + "=" * 65)
-    print("MULAI PROSES EKSTRAKSI TEKS...")
+    print("STARTING TEXT EXTRACTION PIPELINE...")
     print("=" * 65)
 
     total_bubbles = 0
@@ -109,7 +109,7 @@ def main():
 
         t0 = time.perf_counter()
         with Image.open(img_path) as img:
-            # 1. Deteksi
+            # 1. Detection
             t_det0 = time.perf_counter()
             bubbles = detector.detect(img)
             ordered = sort_manga_reading_order(bubbles, reading_direction=args.direction)
@@ -123,19 +123,19 @@ def main():
             t_total = (time.perf_counter() - t0) * 1000
             total_bubbles += len(ordered)
 
-            print(f"\n[{idx:02d}/{len(images)}] {fname} | Deteksi: {t_det:.0f}ms | OCR: {t_ocr:.0f}ms | Total: {t_total:.0f}ms")
+            print(f"\n[{idx:02d}/{len(images)}] {fname} | Detection: {t_det:.0f}ms | OCR: {t_ocr:.0f}ms | Total: {t_total:.0f}ms")
             print("-" * 65)
 
             if not ordered:
-                print("   (Tidak ada balon kata terdeteksi)")
+                print("   (No speech bubbles detected)")
             else:
                 for b in ordered:
                     box = b.bounding_box
                     tbox = b.text_box
-                    print(f"   Balon #{b.id} [Posisi: x={box.x}, y={box.y}, {box.width}x{box.height}]:")
-                    print(f"      -> Teks Jepang: \"{b.text}\"")
+                    print(f"   Bubble #{b.id} [Position: x={box.x}, y={box.y}, {box.width}x{box.height}]:")
+                    print(f"      -> Japanese Text: \"{b.text}\"")
 
-            # Simpan ringkasan hasil OCR ke file JSON
+            # Save OCR summary to JSON file
             json_out = os.path.join(OUTPUT_DIR, f"ocr_{stem}.json")
             with open(json_out, "w", encoding="utf-8") as f:
                 json.dump(
@@ -151,17 +151,17 @@ def main():
                     indent=2
                 )
 
-            # Simpan visualisasi kotak
+            # Save visualization image
             out_img = os.path.join(OUTPUT_DIR, f"out_{stem}.png")
             annotate_and_save_bubbles(img, ordered, out_img)
 
     elapsed = time.time() - t_start
     print("\n" + "=" * 65)
-    print("PENGUJIAN SELESAI")
-    print(f"Total Halaman Diproses: {len(images)}")
-    print(f"Total Balon Diekstrak : {total_bubbles}")
-    print(f"Total Waktu           : {elapsed:.1f}s (Rata-rata: {elapsed / max(1, len(images)):.2f}s/halaman)")
-    print(f"Hasil JSON dan Gambar tersimpan di: {OUTPUT_DIR}")
+    print("BATCH TEST COMPLETED")
+    print(f"Total Pages Processed: {len(images)}")
+    print(f"Total Bubbles Extracted: {total_bubbles}")
+    print(f"Total Elapsed Time    : {elapsed:.1f}s (Average: {elapsed / max(1, len(images)):.2f}s/page)")
+    print(f"JSON and image outputs saved in: {OUTPUT_DIR}")
     print("=" * 65)
 
 

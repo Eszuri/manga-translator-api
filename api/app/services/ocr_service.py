@@ -2,14 +2,14 @@ import os
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 import re
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from PIL import Image
 import numpy as np
 import onnxruntime as ort
 import jaconv
 from transformers import ViTImageProcessorPil as ViTImageProcessor, BertJapaneseTokenizer
 
-from app.schemas import BoundingBox, DetectedBubble
+from app.schemas import DetectedBubble
 
 logger = logging.getLogger(__name__)
 

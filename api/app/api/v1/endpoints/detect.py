@@ -32,25 +32,25 @@ def get_hybrid_detector():
 
 @router.post("/bubbles", response_model=DetectBubblesResponse)
 async def detect_bubbles(
-    file: UploadFile = File(..., description="File gambar halaman manga (JPEG, PNG, WebP)"),
+    file: UploadFile = File(..., description="Manga page image file (JPEG, PNG, WebP)"),
     reading_direction: Literal["rtl", "ltr"] = Form(
         "rtl", 
-        description="Arah baca: 'rtl' (Manga Jepang) atau 'ltr' (Manhwa Korea / Webtoon)"
+        description="Reading direction: 'rtl' (Japanese Manga) or 'ltr' (Korean Manhwa / Webtoon)"
     ),
     detector_type: Literal["hybrid", "comic_text_detector", "contour"] = Form(
         "hybrid",
-        description="Tipe detektor: 'hybrid' (AI + Balon OpenCV - Rekomendasi Utama), 'comic_text_detector' (model AI), atau 'contour' (cepat OpenCV)"
+        description="Detector engine: 'hybrid' (AI + OpenCV Balloon - Recommended), 'comic_text_detector' (Deep Learning AI), or 'contour' (OpenCV)"
     )
 ):
     """
-    Mendeteksi balon percakapan (speech bubbles) pada gambar halaman manga.
-    Mengembalikan daftar koordinat bounding box yang sudah diurutkan berdasarkan kaidah baca manga.
+    Detect speech bubbles and text regions on a manga page.
+    Returns a list of bounding boxes sorted according to comic reading order.
     """
     allowed_types = ["image/jpeg", "image/png", "image/webp", "application/octet-stream"]
     if file.content_type not in allowed_types:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Format file '{file.content_type}' tidak didukung. Gunakan JPEG, PNG, atau WebP."
+            detail=f"File format '{file.content_type}' is not supported. Please use JPEG, PNG, or WebP."
         )
 
     try:
@@ -58,7 +58,7 @@ async def detect_bubbles(
         if not contents:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File gambar yang diunggah kosong."
+                detail="Uploaded image file is empty."
             )
         image = Image.open(io.BytesIO(contents))
         image.load()
@@ -67,12 +67,12 @@ async def detect_bubbles(
             raise e
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Gagal memproses file gambar: {str(e)}"
+            detail=f"Failed to process image file: {str(e)}"
         )
 
     start_time = time.perf_counter()
 
-    # 1. Jalankan deteksi balon kata / teks
+    # 1. Execute speech bubble & text detection
     if detector_type == "comic_text_detector":
         active_detector = get_comic_text_detector()
     elif detector_type == "hybrid":
@@ -82,7 +82,7 @@ async def detect_bubbles(
 
     detected = active_detector.detect(image)
 
-    # 2. Urutkan sesuai kaidah baca komik (RTL / LTR)
+    # 2. Sort according to comic reading order (RTL / LTR)
     ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
 
     duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
