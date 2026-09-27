@@ -936,40 +936,6 @@ class ContourBubbleDetector(BaseBubbleDetector):
         return results
 
 
-
-class MockBubbleDetector(BaseBubbleDetector):
-    """
-    Deterministic detector for unit tests and simulation.
-    """
-    def __init__(self, predefined_bubbles: List[DetectedBubble] = None):
-        self.predefined_bubbles = predefined_bubbles
-
-    def detect(self, image: Image.Image) -> List[DetectedBubble]:
-        if self.predefined_bubbles is not None:
-            return self.predefined_bubbles
-
-        w, h = image.size
-        b1 = BoundingBox(x=int(w * 0.60), y=int(h * 0.10), width=int(w * 0.25), height=int(h * 0.25))
-        b2 = BoundingBox(x=int(w * 0.15), y=int(h * 0.55), width=int(w * 0.30), height=int(h * 0.20))
-
-        return [
-            DetectedBubble(
-                id=1,
-                bounding_box=b1,
-                confidence=0.98,
-                direction="vertical",
-                aspect_ratio=round(b1.height / b1.width, 2)
-            ),
-            DetectedBubble(
-                id=2,
-                bounding_box=b2,
-                confidence=0.95,
-                direction="horizontal",
-                aspect_ratio=round(b2.height / b2.width, 2)
-            ),
-        ]
-
-
 def annotate_and_save_bubbles(
     image: Image.Image,
     bubbles: List[DetectedBubble],
@@ -997,46 +963,4 @@ def annotate_and_save_bubbles(
     out.save(output_path)
     return output_path
 
-
-def process_image_batch(
-    image_paths: List[str],
-    output_dir: Optional[str] = None,
-    detector: Optional[BaseBubbleDetector] = None,
-    reading_direction: str = "rtl"
-) -> Dict[str, List[DetectedBubble]]:
-    """
-    Process a batch of manga images, detecting bubbles and optionally saving
-    annotated images without creating duplicate files.
-    Each input image produces strictly ONE output file named `out_{stem}.png`.
-    """
-    import os
-
-    if detector is None:
-        detector = ContourBubbleDetector()
-
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-
-    batch_results: Dict[str, List[DetectedBubble]] = {}
-
-    for img_path in image_paths:
-        fname = os.path.basename(img_path)
-        stem = os.path.splitext(fname)[0]
-
-        try:
-            with Image.open(img_path) as img:
-                img.load()
-                bubbles = detector.detect(img)
-                ordered = sort_manga_reading_order(bubbles, reading_direction=reading_direction)
-                batch_results[stem] = ordered
-
-                if output_dir:
-                    # Save strictly ONE output file: out_{stem}.png
-                    out_path = os.path.join(output_dir, f"out_{stem}.png")
-                    annotate_and_save_bubbles(img, ordered, out_path)
-        except Exception:
-            # Skip corrupted or unreadable images in batch without failing other files
-            continue
-
-    return batch_results
 

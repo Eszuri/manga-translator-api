@@ -2,13 +2,17 @@
 from app.services.detector import (
     BaseBubbleDetector,
     ContourBubbleDetector,
-    MockBubbleDetector,
-    sort_manga_reading_order
+    sort_manga_reading_order,
+    calculate_iou
 )
+from app.services.comic_text_detector import ComicTextDetector
+from app.services.hybrid_detector import HybridBubbleDetector
 
 __all__ = [
     "BaseBubbleDetector",
     "ContourBubbleDetector",
-    "MockBubbleDetector",
-    "sort_manga_reading_order"
+    "ComicTextDetector",
+    "HybridBubbleDetector",
+    "sort_manga_reading_order",
+    "calculate_iou"
 ]
