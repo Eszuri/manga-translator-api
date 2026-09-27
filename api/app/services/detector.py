@@ -973,11 +973,13 @@ class MockBubbleDetector(BaseBubbleDetector):
 def annotate_and_save_bubbles(
     image: Image.Image,
     bubbles: List[DetectedBubble],
-    output_path: str
+    output_path: str,
+    draw_text_boxes: bool = True
 ) -> str:
     """
     Renders bounding box annotations onto a copy of the manga image
     and saves exactly one output file at the specified output_path.
+    Draws outer bubble in red and inner text box in green (if present and distinct).
     """
     out = image.copy()
     draw = ImageDraw.Draw(out)
@@ -986,6 +988,11 @@ def annotate_and_save_bubbles(
         draw.rectangle([box.x, box.y, box.right, box.bottom], outline=(255, 0, 0), width=4)
         draw.rectangle([box.x, max(0, box.y - 28), box.x + 44, box.y], fill=(255, 0, 0))
         draw.text((box.x + 8, max(0, box.y - 24)), f"#{b.id}", fill=(255, 255, 255))
+
+        if draw_text_boxes and b.text_box is not None:
+            t = b.text_box
+            if t.x != box.x or t.y != box.y or t.width != box.width or t.height != box.height:
+                draw.rectangle([t.x, t.y, t.right, t.bottom], outline=(0, 200, 0), width=2)
 
     out.save(output_path)
     return output_path
@@ -1016,14 +1023,20 @@ def process_image_batch(
         fname = os.path.basename(img_path)
         stem = os.path.splitext(fname)[0]
 
-        with Image.open(img_path) as img:
-            bubbles = detector.detect(img)
-            ordered = sort_manga_reading_order(bubbles, reading_direction=reading_direction)
-            batch_results[stem] = ordered
+        try:
+            with Image.open(img_path) as img:
+                img.load()
+                bubbles = detector.detect(img)
+                ordered = sort_manga_reading_order(bubbles, reading_direction=reading_direction)
+                batch_results[stem] = ordered
 
-            if output_dir:
-                # Save strictly ONE output file: out_{stem}.png
-                out_path = os.path.join(output_dir, f"out_{stem}.png")
-                annotate_and_save_bubbles(img, ordered, out_path)
+                if output_dir:
+                    # Save strictly ONE output file: out_{stem}.png
+                    out_path = os.path.join(output_dir, f"out_{stem}.png")
+                    annotate_and_save_bubbles(img, ordered, out_path)
+        except Exception:
+            # Skip corrupted or unreadable images in batch without failing other files
+            continue
 
     return batch_results
+

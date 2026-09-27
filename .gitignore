@@ -2,3 +2,7 @@
 *.jpg
 /**/*__pycache__/
 /**/*/tests
+*.onnx
+app/models/*.onnx
+.venv-gpu/
+.venv-cuda/

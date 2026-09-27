@@ -9,7 +9,25 @@ from app.services.detector import ContourBubbleDetector, sort_manga_reading_orde
 
 router = APIRouter()
 
-detector = ContourBubbleDetector()
+contour_detector = ContourBubbleDetector()
+_comic_text_detector = None
+_hybrid_detector = None
+
+
+def get_comic_text_detector():
+    global _comic_text_detector
+    if _comic_text_detector is None:
+        from app.services.comic_text_detector import ComicTextDetector
+        _comic_text_detector = ComicTextDetector()
+    return _comic_text_detector
+
+
+def get_hybrid_detector():
+    global _hybrid_detector
+    if _hybrid_detector is None:
+        from app.services.hybrid_detector import HybridBubbleDetector
+        _hybrid_detector = HybridBubbleDetector()
+    return _hybrid_detector
 
 
 @router.post("/bubbles", response_model=DetectBubblesResponse)
@@ -18,6 +36,10 @@ async def detect_bubbles(
     reading_direction: Literal["rtl", "ltr"] = Form(
         "rtl", 
         description="Arah baca: 'rtl' (Manga Jepang) atau 'ltr' (Manhwa Korea / Webtoon)"
+    ),
+    detector_type: Literal["contour", "comic_text_detector", "hybrid"] = Form(
+        "contour",
+        description="Tipe detektor: 'contour' (cepat OpenCV), 'comic_text_detector' (model AI), atau 'hybrid' (AI + Balon OpenCV)"
     )
 ):
     """
@@ -50,8 +72,15 @@ async def detect_bubbles(
 
     start_time = time.perf_counter()
 
-    # 1. Jalankan deteksi balon kata
-    detected = detector.detect(image)
+    # 1. Jalankan deteksi balon kata / teks
+    if detector_type == "comic_text_detector":
+        active_detector = get_comic_text_detector()
+    elif detector_type == "hybrid":
+        active_detector = get_hybrid_detector()
+    else:
+        active_detector = contour_detector
+
+    detected = active_detector.detect(image)
 
     # 2. Urutkan sesuai kaidah baca komik (RTL / LTR)
     ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)

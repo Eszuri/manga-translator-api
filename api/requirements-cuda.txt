@@ -1,0 +1,8 @@
+-r requirements.txt
+Pillow>=10
+numpy>=1.26
+opencv-python-headless>=4.10
+python-multipart>=0.0.18
+huggingface-hub>=0.27
+# Optional CUDA 12 environment; do not combine with requirements-gpu.txt.
+onnxruntime-gpu[cuda,cudnn]==1.26.0
