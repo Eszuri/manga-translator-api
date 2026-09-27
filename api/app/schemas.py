@@ -97,3 +97,15 @@ class TranslateDialoguesResponse(BaseModel):
     processing_time_ms: float
     model: str
 
+
+class InpaintPageResponse(BaseModel):
+    success: bool = True
+    image_width: int
+    image_height: int
+    total_detected: int
+    target_lang: Optional[str] = None
+    image_base64: str = Field(..., description="Base64-encoded clean or typeset manga image")
+    bubbles: List[DetectedBubble] = Field(default_factory=list)
+    processing_time_ms: float
+
+
