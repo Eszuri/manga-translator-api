@@ -36,6 +36,10 @@ class DetectedBubble(BaseModel):
         default=None, 
         description="Koordinat kotak teks di dalam balon (terpisah dari batas balon)"
     )
+    text: Optional[str] = Field(
+        default=None,
+        description="Teks dialog hasil ekstraksi Manga OCR"
+    )
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Tingkat kepercayaan deteksi")
     direction: Literal["vertical", "horizontal"] = Field(
         default="vertical", 

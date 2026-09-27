@@ -14,4 +14,4 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo [SUKSES] Batch folder test GPU selesai dan berhasil!
-pause
+if "%~1"=="" pause

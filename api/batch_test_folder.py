@@ -1,8 +1,12 @@
 import os
+import sys
 import glob
 import time
 import argparse
 from PIL import Image, ImageDraw
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 
 from app.services.detector import (
     ContourBubbleDetector,
@@ -18,9 +22,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Batch test manga bubble/text detection on folder.")
     parser.add_argument(
         "--detector",
-        choices=["contour", "comic_text_detector", "hybrid"],
-        default="contour",
-        help="Detector engine: 'contour' (fast OpenCV), 'comic_text_detector' (Deep Learning AI), or 'hybrid' (AI + Balloon)."
+        choices=["hybrid", "comic_text_detector", "contour"],
+        default="hybrid",
+        help="Detector engine: 'hybrid' (AI + Balloon - default), 'comic_text_detector' (Deep Learning AI), or 'contour' (fast OpenCV)."
     )
     parser.add_argument(
         "--device",

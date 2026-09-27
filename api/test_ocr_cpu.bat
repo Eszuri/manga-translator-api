@@ -1,17 +1,17 @@
 @echo off
 REM ========================================================
-REM BATCH FOLDER TEST - KHUSUS CPU (Hybrid AI + Balloon)
+REM PENGUJIAN MANGA OCR KHUSUS CPU
 REM ========================================================
 echo ========================================================
-echo  MENJALANKAN BATCH FOLDER TEST DENGAN CPU (HYBRID)
+echo  MENJALANKAN DETEKSI + MANGA OCR DENGAN CPU
 echo ========================================================
 
-"..\.venv-gpu\Scripts\python.exe" batch_test_folder.py --detector hybrid --device cpu %*
+"..\.venv-gpu\Scripts\python.exe" batch_test_ocr.py --device cpu --detector hybrid %*
 if %ERRORLEVEL% NEQ 0 (
-    echo [GAGAL] Batch test folder CPU mengalami kendala.
+    echo [GAGAL] Pengujian OCR CPU mengalami kendala.
     exit /b %ERRORLEVEL%
 )
 
 echo.
-echo [SUKSES] Batch folder test CPU selesai dan berhasil!
+echo [SUKSES] Pengujian OCR CPU selesai dan berhasil!
 if "%~1"=="" pause

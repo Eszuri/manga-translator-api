@@ -3,6 +3,7 @@
 /**/*__pycache__/
 /**/*/tests
 *.onnx
-app/models/*.onnx
+**/models/
 .venv-gpu/
 .venv-cuda/
+*.json

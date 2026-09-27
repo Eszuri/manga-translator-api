@@ -37,9 +37,9 @@ async def detect_bubbles(
         "rtl", 
         description="Arah baca: 'rtl' (Manga Jepang) atau 'ltr' (Manhwa Korea / Webtoon)"
     ),
-    detector_type: Literal["contour", "comic_text_detector", "hybrid"] = Form(
-        "contour",
-        description="Tipe detektor: 'contour' (cepat OpenCV), 'comic_text_detector' (model AI), atau 'hybrid' (AI + Balon OpenCV)"
+    detector_type: Literal["hybrid", "comic_text_detector", "contour"] = Form(
+        "hybrid",
+        description="Tipe detektor: 'hybrid' (AI + Balon OpenCV - Rekomendasi Utama), 'comic_text_detector' (model AI), atau 'contour' (cepat OpenCV)"
     )
 ):
     """
