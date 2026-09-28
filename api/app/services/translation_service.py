@@ -76,27 +76,34 @@ class MangaTranslationService:
     def _build_system_prompt(self, target_lang: str) -> str:
         lang_name = "Indonesian" if target_lang.lower() == "id" else "English"
         return (
-            f"You are a professional manga and comic localization translator. "
+            f"You are a professional manga and comic localization translator.\n"
             f"Your task is to translate Japanese manga dialogue bubbles into natural, contextually cohesive {lang_name} ({target_lang}).\n\n"
-            f"Key Translation Guidelines:\n"
-            f"1. Contextual Cohesion: Speech bubbles are provided in authentic manga reading order (#1, #2, #3...). "
+            f"CRITICAL TRANSLATION RULES:\n"
+            f"1. Target Language: Every dialogue in the translation field MUST be translated into {lang_name}. "
+            f"NEVER repeat or echo original Japanese characters (Kanji, Hiragana, Katakana) in the translation field.\n"
+            f"2. Short Expressions: Even short interjections, reactions, and words MUST be translated into {lang_name} "
+            f"(e.g., 'いや、' -> 'Tidak,' / 'Bukan,', 'いい' -> 'Baik' / 'Bagus', '......' -> '...').\n"
+            f"3. Contextual Cohesion: Speech bubbles are provided in authentic manga reading order (#1, #2, #3...). "
             f"Maintain speaker consistency, dialogue continuation, and conversational tone across bubbles.\n"
-            f"2. Tone & Slang: Adapt manga colloquialisms, character personality (e.g. casual, blunt, polite), emotional shouts, "
-            f"and exclamation marks accurately.\n"
-            f"3. Honorifics: Handle Japanese honorifics (-san, -kun, senpai) naturally for manga localization.\n"
-            f"4. Output Format: You MUST output ONLY a valid JSON object matching the following structure:\n"
+            f"4. Tone & Slang: Adapt manga colloquialisms, character personality, emotional shouts, and exclamation marks accurately.\n"
+            f"5. Honorifics: Handle Japanese honorifics naturally for manga localization.\n"
+            f"6. Output Format: You MUST output ONLY a valid JSON object matching the following structure:\n"
             f'{{\n  "translations": [\n    {{"id": 1, "translation": "..."}},\n    {{"id": 2, "translation": "..."}}\n  ]\n}}\n'
-            f"Do not include any conversational preface or markdown explanation outside the JSON."
+            f"Do not include any conversational preface, explanation, or markdown fences outside the JSON."
         )
 
     def _build_user_prompt(self, bubbles_data: List[Dict[str, Any]], target_lang: str) -> str:
         lang_name = "Indonesian" if target_lang.lower() == "id" else "English"
-        lines = [f"Translate the following manga dialogue bubbles in order into {lang_name}:"]
+        lines = [
+            f"Translate these Japanese manga bubbles into natural {lang_name}. "
+            f"Do not copy or output Japanese characters:"
+        ]
         for item in bubbles_data:
             b_id = item["id"]
             text = item.get("text", "").strip()
             lines.append(f"[Bubble #{b_id}]: {text}")
         return "\n".join(lines)
+
 
     def _generate_fallback_translations(
         self,
