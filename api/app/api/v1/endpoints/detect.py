@@ -49,7 +49,6 @@ async def detect_bubbles(
 
     start_time = time.perf_counter()
 
-    # 1. Execute speech bubble & text detection
     if detector_type == "comic_text_detector":
         active_detector = get_comic_text_detector()
     elif detector_type == "hybrid":
@@ -58,8 +57,6 @@ async def detect_bubbles(
         active_detector = contour_detector
 
     detected = active_detector.detect(image)
-
-    # 2. Sort according to comic reading order (RTL / LTR)
     ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
 
     duration_ms = round((time.perf_counter() - start_time) * 1000, 2)

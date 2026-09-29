@@ -21,13 +21,11 @@ def extract_json_from_text(text: str) -> Optional[dict]:
     if not text:
         return None
 
-    # 1. Direct parse attempt
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 2. Strip markdown code fences ```json ... ``` or ``` ... ```
     match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
     if match:
         try:
@@ -35,7 +33,6 @@ def extract_json_from_text(text: str) -> Optional[dict]:
         except json.JSONDecodeError:
             pass
 
-    # 3. Find outer-most { ... } braces
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -360,23 +357,19 @@ class MangaTranslationService:
         result: Dict[int, str] = {}
 
         if parsed and isinstance(parsed, dict):
-            # Check for "translations" key or direct mapping
             translations_list = parsed.get("translations")
             if isinstance(translations_list, list):
                 for item in translations_list:
                     if isinstance(item, dict) and "id" in item and "translation" in item:
                         result[int(item["id"])] = str(item["translation"]).strip()
             elif isinstance(parsed, dict):
-                # Might be {"1": "...", "2": "..."}
                 for k, v in parsed.items():
                     if str(k).isdigit() and isinstance(v, str):
                         result[int(k)] = v.strip()
 
-        # If any bubble ID is missing from parsed result, provide fallback
         for item in dialogue_items:
             b_id = item["id"]
             if b_id not in result or not result[b_id]:
-                # If parsed failed entirely, provide raw text if single item, else fallback
                 if len(dialogue_items) == 1 and not result:
                     result[b_id] = raw_content.strip()
                 else:

@@ -48,7 +48,6 @@ class MangaInpaintingService:
         # Neural segmentation is evidence, not permission to erase the entire page.
         if seg_mask is not None:
             char_mask = (seg_mask > self.mask_threshold).astype(np.uint8) * 255
-            # Resize if dimensions differ
             if char_mask.shape != (orig_h, orig_w):
                 char_mask = cv2.resize(char_mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
         if bubbles is None:
@@ -118,7 +117,6 @@ class MangaInpaintingService:
                     final_mask[py1:py2, px1:px2] |= extra
                     allowed[py1:py2, px1:px2] |= inner
 
-        # 3. Morphological dilation to fully encompass text stroke antialiasing
         if self.dilation_kernel_size > 0 and self.dilation_iterations > 0:
             kernel = cv2.getStructuringElement(
                 cv2.MORPH_ELLIPSE,

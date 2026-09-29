@@ -67,14 +67,10 @@ async def recognize_page_text(
 
     start_time = time.perf_counter()
 
-    # 1. Detect speech bubbles
     detector = get_detector_instance(detector_type, device)
     detected = detector.detect(image)
-
-    # 2. Sort into reading order
     ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
 
-    # 3. Run Manga-OCR on each detected bubble
     ocr_service = get_ocr_service(device=device)
     ordered_bubbles = ocr_service.recognize_all_bubbles(image, ordered_bubbles)
 

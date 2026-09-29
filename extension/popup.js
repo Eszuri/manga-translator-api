@@ -1,5 +1,3 @@
-// popup.js — Simplified Popup Controller with Merged Site Card
-
 document.addEventListener('DOMContentLoaded', () => {
   const serverStatusDot = document.getElementById('serverStatusDot');
   const serverStatusText = document.getElementById('serverStatusText');
@@ -17,7 +15,6 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentDomain = '';
   let healthCheckInterval = null;
 
-  // 1. Detect current website & load status
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
     if (tab && tab.url) {
       try {
@@ -34,13 +31,11 @@ document.addEventListener('DOMContentLoaded', () => {
     siteToggle.disabled = true;
   });
 
-  // 2. Initialize
   loadSettings();
   loadStats();
   checkApiHealth();
   healthCheckInterval = setInterval(checkApiHealth, 8000);
 
-  // 3. Site toggle listener
   siteToggle.addEventListener('change', () => {
     if (!currentDomain) return;
     const isEnabled = siteToggle.checked;
@@ -76,12 +71,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // 4. Auto-save settings on change
   [translator, targetLang, readingDirection, apiUrl].forEach(el => {
     el.addEventListener('change', saveSettings);
   });
 
-  // 5. Manual re-scan trigger
   btnTranslate.addEventListener('click', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab) return;
@@ -104,7 +97,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // 6. Update stats when background / content script updates
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes.lastTranslationStats) {
       const stats = changes.lastTranslationStats.newValue;
@@ -114,7 +106,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // ─── Helpers ────────────────────────────────────────────────────────
   function loadSiteStatus(domain) {
     chrome.storage.sync.get({ enabledDomains: [] }, (items) => {
       const enabledList = items.enabledDomains || [];

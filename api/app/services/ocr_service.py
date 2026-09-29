@@ -47,7 +47,6 @@ class MangaOcrService:
         encoder_path = os.path.join(self.model_dir, "encoder_model.onnx")
         decoder_path = os.path.join(self.model_dir, "decoder_model.onnx")
 
-        # Fallback to Hugging Face repo if local files missing
         model_source = self.model_dir if os.path.exists(encoder_path) else "mayocream/manga-ocr-onnx"
 
         logger.info(f"Loading OCR processor and tokenizer from: {model_source}")
@@ -57,7 +56,6 @@ class MangaOcrService:
         self.eos_token_id = self.tokenizer.sep_token_id or self.tokenizer.eos_token_id
         self.bos_token_id = self.tokenizer.cls_token_id or self.tokenizer.bos_token_id
 
-        # Configure ONNX Runtime sessions
         opts = ort.SessionOptions()
         opts.log_severity_level = 3
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -82,7 +80,6 @@ class MangaOcrService:
                     f"Available providers: {available_providers}"
                 )
         else:
-            # Auto mode
             if "CUDAExecutionProvider" in available_providers and hasattr(ort, "preload_dlls"):
                 ort.preload_dlls()
             if "CUDAExecutionProvider" in available_providers:
@@ -122,7 +119,6 @@ class MangaOcrService:
         encoder_outputs = self.encoder_session.run(None, {"pixel_values": pixel_values})
         last_hidden_state = encoder_outputs[0]
 
-        # Autoregressive Greedy Decoding
         input_ids = np.array([[self.bos_token_id]], dtype=np.int64)
 
         for _ in range(max_length):
@@ -161,7 +157,6 @@ class MangaOcrService:
         target = bubble.text_box if bubble.text_box is not None else bubble.bounding_box
         w, h = full_image.size
 
-        # Apply padding clamped to image bounds
         x1 = max(0, target.x - padding)
         y1 = max(0, target.y - padding)
         x2 = min(w, target.right + padding)

@@ -779,7 +779,6 @@ class ContourBubbleDetector(BaseBubbleDetector):
         h, w = gray.shape
         scale = max(w, h) / 1600.0
 
-        # 1. Detect Rectangular Narration Boxes with Verified Text
         narration_boxes = self._detect_narration_boxes(gray, w, h, scale)
         # Wide, shallow unframed chapter headings are frequently mistaken for
         # rectangular narration.  They are page furniture, not dialogue.
@@ -788,12 +787,9 @@ class ContourBubbleDetector(BaseBubbleDetector):
             if not (item[0].width > w * 0.40 and item[0].height < h * 0.10)
         ]
 
-        # 2. Detect Text-Driven Speech Bubbles
         text_bubbles = self._detect_text_bubbles(gray, w, h, scale)
-
         combined = narration_boxes + text_bubbles
 
-        # 3. Fallback for synthetic/empty bubble manga templates (used in unit tests)
         if not combined:
             # Empty synthetic fixtures use a handful of flat tones.  Running
             # this contour fallback on detailed manga pages mistakes arrows,
@@ -806,7 +802,6 @@ class ContourBubbleDetector(BaseBubbleDetector):
         if not combined:
             return []
 
-        # 5. Non-Maximum Suppression to remove overlapping duplicates
         sorted_boxes = sorted(combined, key=lambda item: item[0].area, reverse=True)
         selected: List[Tuple[BoundingBox, str]] = []
         for item in sorted_boxes:

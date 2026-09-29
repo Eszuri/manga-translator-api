@@ -1,6 +1,3 @@
-/* content.css — Manga Translator Styles (Simple & Clean) */
-
-/* ─── Image Wrapper ─────────────────────────────────────────────── */
 .manga-translator-wrapper {
   position: relative !important;
   display: inline-block !important;
@@ -13,7 +10,6 @@
   height: auto;
 }
 
-/* ─── Simple Loading Overlay ────────────────────────────────────── */
 .manga-translator-loading {
   position: absolute;
   top: 0;
@@ -48,7 +44,6 @@
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
 }
 
-/* ─── Simple Progress Bar (Top of Page) ─────────────────────────── */
 .manga-translator-progress-bar {
   position: fixed;
   top: 0;
@@ -82,7 +77,6 @@
   font-weight: 600;
 }
 
-/* ─── Animations ────────────────────────────────────────────────── */
 @keyframes manga-translator-spin {
   to { transform: rotate(360deg); }
 }

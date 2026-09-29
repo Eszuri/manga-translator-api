@@ -81,18 +81,13 @@ async def translate_manga_page(
 
     start_time = time.perf_counter()
 
-    # 1. Detection
     detector = get_detector_instance(detector_type, device)
     detected = detector.detect(image)
-
-    # 2. Sort into reading order
     ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
 
-    # 3. OCR (Manga-OCR)
     ocr_service = get_ocr_service(device=device)
     ordered_bubbles = ocr_service.recognize_all_bubbles(image, ordered_bubbles)
 
-    # 4. Contextual Translation (LLM)
     trans_service = get_translation_service()
     ordered_bubbles = await trans_service.translate_bubbles_async(ordered_bubbles, target_lang=target_lang)
 
@@ -197,12 +192,10 @@ async def inpaint_and_translate_manga_page(
 
     start_time = time.perf_counter()
 
-    # 1. Detection
     detector = get_detector_instance(detector_type, device)
     detected = detector.detect(image)
     ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
 
-    # 2. Extract neural segmentation mask if detector supports it
     seg_mask = None
     if detector_type in ("hybrid", "comic_text_detector"):
         comic_det = getattr(detector, "comic_detector", detector)
@@ -213,22 +206,18 @@ async def inpaint_and_translate_manga_page(
             except Exception:
                 seg_mask = None
 
-    # 3. OCR (Manga-OCR) if typesetting requested
     if typeset and ordered_bubbles:
         ocr_service = get_ocr_service(device=device)
         ordered_bubbles = ocr_service.recognize_all_bubbles(image, ordered_bubbles)
 
-        # 4. Contextual Translation (LLM)
         trans_service = get_translation_service()
         ordered_bubbles = await trans_service.translate_bubbles_async(
             ordered_bubbles, target_lang=target_lang, translator=translator
         )
 
-    # 5. Inpaint / Erase text
     inpaint_service = MangaInpaintingService()
     inpainted_img = inpaint_service.inpaint(image, seg_mask=seg_mask, bubbles=ordered_bubbles)
 
-    # 6. Typeset translated text
     if typeset and ordered_bubbles:
         typeset_service = MangaTypesettingService(all_caps=all_caps)
         final_img = typeset_service.typeset(inpainted_img, ordered_bubbles, font_scale=font_scale)
@@ -237,7 +226,6 @@ async def inpaint_and_translate_manga_page(
 
     duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
-    # Ensure RGB mode for JPEG encoding
     if final_img.mode != "RGB":
         final_img = final_img.convert("RGB")
 
@@ -256,7 +244,6 @@ async def inpaint_and_translate_manga_page(
             }
         )
 
-    # JSON format with base64 image
     img_b64 = base64.b64encode(img_bytes).decode("utf-8")
     return InpaintPageResponse(
         success=True,
@@ -315,7 +302,6 @@ async def inpaint_stream_manga_page(
     async def stream_generator():
         start_time = time.perf_counter()
         try:
-            # Stage 1: Detection
             yield json.dumps({"stage": "detect", "message": "Mendeteksi bubble teks..."}) + "\n"
             await asyncio.sleep(0.01)
 
@@ -323,7 +309,6 @@ async def inpaint_stream_manga_page(
             detected = detector.detect(image)
             ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
 
-            # Neural segmentation mask extraction
             seg_mask = None
             if detector_type in ("hybrid", "comic_text_detector"):
                 comic_det = getattr(detector, "comic_detector", detector)
@@ -334,7 +319,6 @@ async def inpaint_stream_manga_page(
                     except Exception:
                         seg_mask = None
 
-            # Stage 2: OCR & Stage 3: Translation
             if typeset and ordered_bubbles:
                 yield json.dumps({
                     "stage": "ocr",
@@ -365,14 +349,12 @@ async def inpaint_stream_manga_page(
                 }) + "\n"
                 await asyncio.sleep(0.01)
 
-            # Stage 4: Inpainting / Text Erasure
             yield json.dumps({"stage": "inpaint", "message": "Menghapus teks asli (Inpainting)..."}) + "\n"
             await asyncio.sleep(0.01)
 
             inpaint_service = MangaInpaintingService()
             inpainted_img = inpaint_service.inpaint(image, seg_mask=seg_mask, bubbles=ordered_bubbles)
 
-            # Stage 5: Typesetting & Rendering
             yield json.dumps({"stage": "render", "message": "Rendering & typesetting teks..."}) + "\n"
             await asyncio.sleep(0.01)
 

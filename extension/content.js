@@ -1,19 +1,13 @@
-// content.js — Manga Translator Content Script
-// Auto-process: detects manga images and translates them one-by-one using inpainting
-// Each image is replaced immediately as its translation completes
-
 class MangaTranslator {
   constructor() {
-    this.processedImages = new Set();   // Track already-processed <img> elements
-    this.processingQueue = [];          // Images waiting to be processed
-    this.isProcessing = false;          // Lock: only one image at a time
+    this.processedImages = new Set();
+    this.processingQueue = [];
+    this.isProcessing = false;
     this.settings = null;
     this.totalProcessed = 0;
     this.totalImages = 0;
     this.isScanning = false;
     this.isEnabled = false;
-
-    // Progress bar element
     this.progressBar = null;
 
     this.init();
@@ -24,7 +18,6 @@ class MangaTranslator {
     this.setupMessageListener();
     this.setupKeyboardShortcuts();
 
-    // Default is NONAKTIF: only process if site is in enabledDomains
     const hostname = window.location.hostname;
     const enabledList = (this.settings && this.settings.enabledDomains) || [];
     if (!enabledList.includes(hostname)) {
@@ -33,11 +26,7 @@ class MangaTranslator {
     }
 
     this.isEnabled = true;
-
-    // Auto-start: find all manga images and process them
     this.scanAndProcess();
-
-    // Watch for dynamically loaded images (infinite scroll readers)
     this.setupMutationObserver();
   }
 
@@ -60,7 +49,6 @@ class MangaTranslator {
     });
   }
 
-  // ─── Message Listener (from popup / background) ────────────────────
   setupMessageListener() {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       switch (request.action) {
@@ -100,7 +88,6 @@ class MangaTranslator {
           break;
 
         case 'contextMenuTranslateStart':
-          // Show loading on specific image
           this.showImageLoading(request.srcUrl);
           sendResponse({ success: true });
           break;
@@ -123,13 +110,11 @@ class MangaTranslator {
       return true;
     });
 
-    // Reload settings when changed from popup
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === 'sync') this.loadSettings();
     });
   }
 
-  // ─── Keyboard Shortcuts ────────────────────────────────────────────
   setupKeyboardShortcuts() {
     document.addEventListener('keydown', (e) => {
       if (e.altKey && e.key.toLowerCase() === 't') {
@@ -142,23 +127,19 @@ class MangaTranslator {
     });
   }
 
-  // ─── Scan & Auto-Process (Waits for all images to load first) ───────
   async scanAndProcess() {
     if (!this.isEnabled) return;
     if (this.isScanning) return;
     this.isScanning = true;
 
-    // Show initial waiting indicator in progress bar
     this.showProgressBar();
     if (this.progressBar) {
       const pText = this.progressBar.querySelector('.manga-translator-progress-text');
       if (pText) pText.textContent = '⏳ Menunggu semua gambar di halaman termuat...';
     }
 
-    // Wait until all images currently on the page are completely loaded
     await this.waitForAllImagesToLoad();
 
-    // Now all loaded images have natural dimensions available
     const allImgs = Array.from(document.querySelectorAll('img'));
     const mangaImgs = allImgs.filter(img => !this.processedImages.has(img) && this.isMangaImage(img));
 
@@ -168,7 +149,6 @@ class MangaTranslator {
       return;
     }
 
-    // Wrap and queue all confirmed manga images
     mangaImgs.forEach(img => {
       this.processedImages.add(img);
       this.wrapImage(img);
@@ -183,13 +163,11 @@ class MangaTranslator {
     }
 
     this.isScanning = false;
-
-    // Start sequential processing (one-by-one)
     this.processNext();
   }
 
   async waitForAllImagesToLoad() {
-    const maxWaitMs = 15000; // max wait 15s fallback so broken ad images don't block
+    const maxWaitMs = 15000;
     const startTime = Date.now();
 
     while (Date.now() - startTime < maxWaitMs) {
@@ -200,13 +178,12 @@ class MangaTranslator {
       const pending = allImgs.filter(img => !img.complete || img.naturalWidth === 0);
 
       if (pending.length === 0 && allImgs.length > 0) {
-        // Wait brief 600ms stabilization window
         await new Promise(r => setTimeout(r, 600));
         const checkAgain = Array.from(document.querySelectorAll('img')).filter(
           img => !this.processedImages.has(img) && (img.src || img.dataset.src || img.dataset.lazySrc) && (!img.complete || img.naturalWidth === 0)
         );
         if (checkAgain.length === 0) {
-          break; // All images loaded!
+          break;
         }
       }
 
@@ -234,13 +211,11 @@ class MangaTranslator {
   }
 
   isMangaImage(img) {
-    // Must be large enough to be a manga page (not thumbnail/icon/avatar)
     return img.naturalWidth > 300 && img.naturalHeight > 400;
   }
 
-  // ─── Sequential Processing (one-by-one) ────────────────────────────
   async processNext() {
-    if (this.isProcessing) return;         // Already processing one
+    if (this.isProcessing) return;
     if (this.processingQueue.length === 0) {
       this.hideProgressBar();
       return;
@@ -264,11 +239,9 @@ class MangaTranslator {
     this.hideImageLoading(null, img);
     this.isProcessing = false;
 
-    // Process next image in queue
     this.processNext();
   }
 
-  // ─── Translate Single Image (Inpaint Stream) ───────────────────────
   async translateImage(img) {
     const settings = this.settings || await this.loadSettings();
     const fileData = await this.getImageDataUrl(img);
@@ -292,10 +265,8 @@ class MangaTranslator {
     });
 
     if (result.success && result.data) {
-      // Replace image immediately
       img.src = result.data;
 
-      // Save stats
       chrome.storage.local.set({
         lastTranslationStats: {
           bubblesDetected: result.totalDetected || this.totalProcessed,
@@ -309,7 +280,6 @@ class MangaTranslator {
     this.currentProcessingImg = null;
   }
 
-  // ─── Real-Time Pipeline Progress Handler ───────────────────────────
   handlePipelineProgress(request) {
     const img = this.currentProcessingImg || this.findImageBySrc(request.imageSrc);
     if (!img) return;
@@ -333,7 +303,6 @@ class MangaTranslator {
     const label = stageNames[request.stage] || 'Translate...';
     if (text) text.textContent = label;
 
-    // Update top progress bar
     if (this.progressBar) {
       const pText = this.progressBar.querySelector('.manga-translator-progress-text');
       if (pText) {
@@ -344,7 +313,6 @@ class MangaTranslator {
     }
   }
 
-  // ─── Image Wrapper ─────────────────────────────────────────────────
   wrapImage(img) {
     if (img.closest('.manga-translator-wrapper')) return;
 
@@ -363,7 +331,6 @@ class MangaTranslator {
     wrapper.appendChild(loading);
   }
 
-  // ─── Loading State Per-Image ───────────────────────────────────────
   showImageLoading(srcUrl, imgEl) {
     const img = imgEl || this.findImageBySrc(srcUrl);
     if (!img) return;
@@ -396,7 +363,6 @@ class MangaTranslator {
     return null;
   }
 
-  // ─── Restore Originals ─────────────────────────────────────────────
   applyInpaintBySrc(srcUrl, dataUrl) {
     const img = this.findImageBySrc(srcUrl);
     if (img) {
@@ -405,7 +371,6 @@ class MangaTranslator {
     }
   }
 
-  // ─── Progress Bar ──────────────────────────────────────────────────
   showProgressBar() {
     if (!this.progressBar) {
       this.progressBar = document.createElement('div');
@@ -434,7 +399,6 @@ class MangaTranslator {
 
   hideProgressBar() {
     if (this.progressBar) {
-      // Show completion briefly
       const text = this.progressBar.querySelector('.manga-translator-progress-text');
       const fill = this.progressBar.querySelector('.manga-translator-progress-fill');
       text.textContent = `✅ Done! ${this.totalProcessed} pages translated`;
@@ -446,7 +410,6 @@ class MangaTranslator {
     }
   }
 
-  // ─── Mutation Observer (infinite scroll) ───────────────────────────
   setupMutationObserver() {
     let debounceTimer = null;
     const observer = new MutationObserver((mutations) => {
@@ -469,7 +432,6 @@ class MangaTranslator {
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
-  // ─── Helpers ───────────────────────────────────────────────────────
   async getImageDataUrl(img) {
     try {
       const canvas = document.createElement('canvas');
@@ -479,7 +441,6 @@ class MangaTranslator {
       ctx.drawImage(img, 0, 0);
       return canvas.toDataURL('image/jpeg', 0.9);
     } catch (e) {
-      // CORS tainted — fetch via background service worker
       const result = await this.sendMessage({ action: 'fetchImage', url: img.src });
       if (result.success) return result.data;
       throw new Error('Cannot access image: ' + e.message);
@@ -499,7 +460,6 @@ class MangaTranslator {
   }
 }
 
-// ─── Initialize on page ready ──────────────────────────────────────
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => new MangaTranslator());
 } else {

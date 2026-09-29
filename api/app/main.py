@@ -11,7 +11,6 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Apply the explicit CORS policy configured for local clients and extensions.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
@@ -20,7 +19,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include v1 API router
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
 

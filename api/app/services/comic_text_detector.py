@@ -64,7 +64,6 @@ class ComicTextDetector(BaseBubbleDetector):
         self.nms_threshold = nms_threshold
         self.num_threads = num_threads
         
-        # Normalize device option
         target_device = "gpu" if require_gpu else device.lower()
         if target_device not in ("auto", "gpu", "cpu"):
             target_device = "auto"
@@ -78,7 +77,6 @@ class ComicTextDetector(BaseBubbleDetector):
                     "GPU required but neither CUDA nor DirectML is active. "
                     "Use .venv-gpu/Scripts/python.exe and install requirements-gpu.txt."
                 )
-            # Total lockdown on GPU: do not silently fall back to CPU
             self.session.disable_fallback()
 
     def _init_session(self):
@@ -92,7 +90,6 @@ class ComicTextDetector(BaseBubbleDetector):
             self.device_name = self._compute_device_name()
             return
 
-        # Download from Hugging Face if file doesn't exist locally
         if not os.path.exists(self.model_path):
             try:
                 from huggingface_hub import hf_hub_download
@@ -133,7 +130,6 @@ class ComicTextDetector(BaseBubbleDetector):
                     f"Available providers: {available_providers}"
                 )
         else:
-            # Auto mode: prefer GPU if available, else CPU
             if "CUDAExecutionProvider" in available_providers and hasattr(ort, "preload_dlls"):
                 ort.preload_dlls()
             if "CUDAExecutionProvider" in available_providers:
@@ -216,7 +212,6 @@ class ComicTextDetector(BaseBubbleDetector):
         max_cls_prob = np.maximum(prob_h, prob_v)
         scores = obj_conf * max_cls_prob
 
-        # 1. Filter candidates by score threshold
         valid_mask = scores > self.conf_threshold
         if not np.any(valid_mask):
             return []
@@ -230,7 +225,6 @@ class ComicTextDetector(BaseBubbleDetector):
         prob_h_v = prob_h[candidate_indices]
         prob_v_v = prob_v[candidate_indices]
 
-        # Convert cx, cy, w, h to x1, y1, w, h in letterbox space for OpenCV NMS
         x1_v = cx_v - w_v / 2.0
         y1_v = cy_v - h_v / 2.0
 
@@ -240,7 +234,6 @@ class ComicTextDetector(BaseBubbleDetector):
         ]
         nms_scores = [float(s) for s in scores_v]
 
-        # 2. Non-Maximum Suppression (NMS)
         selected_indices = cv2.dnn.NMSBoxes(
             bboxes=nms_boxes,
             scores=nms_scores,
@@ -256,7 +249,6 @@ class ComicTextDetector(BaseBubbleDetector):
         for item in selected_indices:
             idx = item if isinstance(item, (int, np.integer)) else item[0]
 
-            # Undo letterbox padding and scaling
             unpad_x = x1_v[idx] - dw
             unpad_y = y1_v[idx] - dh
             # Clip endpoints independently; moving a negative origin alone used
@@ -269,7 +261,6 @@ class ComicTextDetector(BaseBubbleDetector):
             if bw <= 0 or bh <= 0:
                 continue
 
-            # Direction: vertical vs horizontal
             direction = "vertical" if prob_v_v[idx] >= prob_h_v[idx] else "horizontal"
             aspect_ratio = round(bh / max(1, bw), 2)
             conf = float(scores_v[idx])
@@ -279,7 +270,7 @@ class ComicTextDetector(BaseBubbleDetector):
             bubble = DetectedBubble(
                 id=len(detected_list) + 1,
                 bounding_box=bbox,
-                text_box=bbox,  # Exact text bounding box from detector
+                text_box=bbox,
                 confidence=round(conf, 2),
                 direction=direction,
                 aspect_ratio=aspect_ratio,

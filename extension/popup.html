@@ -32,7 +32,6 @@
       font-size: 13px;
     }
 
-    /* Header */
     .header {
       display: flex;
       align-items: center;
@@ -75,7 +74,6 @@
       box-shadow: 0 0 6px rgba(46, 204, 113, 0.6);
     }
 
-    /* Merged Site & Status Card */
     .site-card {
       background: var(--card);
       border: 1px solid var(--border);
@@ -115,7 +113,6 @@
       color: var(--text-muted);
     }
 
-    /* Toggle Switch */
     .toggle-switch {
       position: relative;
       display: inline-block;
@@ -159,7 +156,6 @@
       transform: translateX(16px);
     }
 
-    /* Form Settings */
     .setting-row {
       margin-bottom: 10px;
     }
@@ -190,7 +186,6 @@
       border-color: var(--accent);
     }
 
-    /* Primary Action */
     .btn-action {
       width: 100%;
       background: var(--accent);
@@ -215,7 +210,6 @@
   </style>
 </head>
 <body>
-  <!-- Header -->
   <div class="header">
     <div class="title-box">
       <span style="font-size: 16px;">🎌</span>
@@ -227,7 +221,6 @@
     </div>
   </div>
 
-  <!-- Merged Site & Status Card -->
   <div class="site-card">
     <div class="site-info">
       <span class="site-domain" id="siteHostname">Memuat web...</span>
@@ -239,7 +232,6 @@
     </label>
   </div>
 
-  <!-- Settings -->
   <div class="setting-row">
     <label class="setting-label" for="translator">Penerjemah</label>
     <select id="translator">
@@ -269,7 +261,6 @@
     <input type="text" id="apiUrl" value="http://127.0.0.1:8000">
   </div>
 
-  <!-- Action Button -->
   <button class="btn-action" id="btnTranslate">
     <span>⚡</span> Scan Ulang
   </button>

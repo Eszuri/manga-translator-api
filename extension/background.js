@@ -1,5 +1,3 @@
-// background.js
-
 const DEFAULT_SETTINGS = {
   apiUrl: 'http://127.0.0.1:8000',
   targetLang: 'id',
@@ -14,7 +12,6 @@ const DEFAULT_SETTINGS = {
   enabledDomains: []
 };
 
-// 5. Helper function `getSettings()`
 async function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(DEFAULT_SETTINGS, (items) => {
@@ -23,7 +20,6 @@ async function getSettings() {
   });
 }
 
-// 6. Helper function `apiRequest(endpoint, options)`
 async function apiRequest(endpoint, options = {}) {
   const settings = await getSettings();
   const url = `${settings.apiUrl.replace(/\/$/, '')}${endpoint}`;
@@ -42,16 +38,12 @@ async function apiRequest(endpoint, options = {}) {
       try {
         const errJson = await res.json();
         if (errJson.detail) errorMsg = errJson.detail;
-      } catch (e) {
-        // Not JSON
-      }
+      } catch (e) {}
       return { success: false, error: errorMsg };
     }
     
-    // Check if we expect a blob (like for inpaint image return)
     if (options.expectBlob) {
       const blob = await res.blob();
-      // Read blob as base64 to pass it via Chrome messaging
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onloadend = () => {
@@ -76,7 +68,6 @@ async function apiRequest(endpoint, options = {}) {
   }
 }
 
-// Base64 to Blob helper
 function base64ToBlob(base64, mimeType = 'image/jpeg') {
   const byteCharacters = atob(base64.split(',')[1]);
   const byteArrays = [];
@@ -94,7 +85,6 @@ function base64ToBlob(base64, mimeType = 'image/jpeg') {
   return new Blob(byteArrays, { type: mimeType });
 }
 
-// 2. Message handlers
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   (async () => {
     try {
@@ -183,7 +173,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
-            buffer = lines.pop(); // keep remainder
+            buffer = lines.pop();
             
             for (const line of lines) {
               const trimmed = line.trim();
@@ -200,7 +190,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 } else if (data.stage === 'error') {
                   finalResult = { success: false, error: data.message };
                 } else {
-                  // Forward live progress update to the tab
                   if (sender.tab && sender.tab.id) {
                     chrome.tabs.sendMessage(sender.tab.id, {
                       action: 'pipelineProgress',
@@ -243,7 +232,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse(result);
       }
       else if (request.action === 'fetchImage') {
-        // Proxy image fetch for content scripts that can't access cross-origin images
         try {
           const imgRes = await fetch(request.url);
           const blob = await imgRes.blob();
@@ -270,12 +258,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
   })();
   
-  // Return true to indicate we wish to send a response asynchronously
   return true;
 });
 
-
-// 3. Context menu
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "translateMangaPage",
@@ -287,7 +272,6 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "translateMangaPage" && info.srcUrl) {
     try {
-      // Send message to content script to show loading state if possible
       chrome.tabs.sendMessage(tab.id, { 
           action: 'contextMenuTranslateStart', 
           srcUrl: info.srcUrl 
@@ -297,7 +281,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       
       const settings = await getSettings();
       
-      // Fetch the image from the URL to get a blob
       const imgRes = await fetch(info.srcUrl);
       const imgBlob = await imgRes.blob();
       
@@ -320,7 +303,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
           expectBlob: settings.translationMode === 'inpaint'
       });
       
-      // Send result back to content script
       chrome.tabs.sendMessage(tab.id, {
           action: 'contextMenuTranslateResult',
           srcUrl: info.srcUrl,

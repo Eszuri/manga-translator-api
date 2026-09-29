@@ -44,14 +44,12 @@ class MangaTypesettingService:
             return self._font_cache[size]
 
         font = None
-        # 1. Try specified comic font path
         if self.font_path and os.path.exists(self.font_path):
             try:
                 font = ImageFont.truetype(self.font_path, size=size)
             except Exception:
                 font = None
 
-        # 2. Try Windows system Comic Sans / Arial fallbacks
         if font is None:
             fallbacks = [
                 "C:\\Windows\\Fonts\\comicbd.ttf",
@@ -67,7 +65,6 @@ class MangaTypesettingService:
                     except Exception:
                         continue
 
-        # 3. Final default fallback
         if font is None:
             font = ImageFont.load_default()
 
@@ -273,7 +270,6 @@ class MangaTypesettingService:
             target_w = content_right - content_left
             target_h = content_bottom - content_top
 
-            # Find optimal font and wrapped lines
             # Regions without a balloon polygon are often narration printed
             # directly over panel art. Use a smaller caption scale there so
             # a large detector rectangle cannot turn prose into a headline.
@@ -297,11 +293,9 @@ class MangaTypesettingService:
             text_layer = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
             text_draw = ImageDraw.Draw(text_layer)
 
-            # Compute vertical starting point centered in the safe content area.
             total_h = sum(line_heights) + max(0, len(lines) - 1) * spacing
             cur_y = (target_h - total_h) / 2.0
 
-            # Dynamic stroke thickness for crispness
             stroke_width = max(1, int(font.size * 0.07)) if stroke_color else 0
 
             for i, line in enumerate(lines):
