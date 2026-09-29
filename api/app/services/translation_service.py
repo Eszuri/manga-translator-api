@@ -150,14 +150,70 @@ class MangaTranslationService:
 
         return bubbles
 
+    async def _call_google_async(
+        self,
+        dialogue_items: List[Dict[str, Any]],
+        target_lang: str = "id"
+    ) -> Dict[int, str]:
+        """Translates dialogue items using Google Translate (fast & free)."""
+        import unicodedata
+
+        results: Dict[int, str] = {}
+        target_code = "id" if target_lang.lower() in ("id", "indonesian") else "en"
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for item in dialogue_items:
+                b_id = item["id"]
+                original = item.get("text", "").strip()
+                if not original:
+                    results[b_id] = ""
+                    continue
+
+                compact = re.sub(r"\s+", "", original)
+                if re.fullmatch(r"[.．…・·｡。⋯･]+", compact):
+                    results[b_id] = "..."
+                    continue
+                elif re.fullmatch(r"[!！]+", compact):
+                    results[b_id] = "!"
+                    continue
+                elif re.fullmatch(r"[?？]+", compact):
+                    results[b_id] = "?"
+                    continue
+
+                try:
+                    url = "https://translate.googleapis.com/translate_a/single"
+                    params = {
+                        "client": "gtx",
+                        "sl": "ja",
+                        "tl": target_code,
+                        "dt": "t",
+                        "q": original
+                    }
+                    resp = await client.get(url, params=params)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        translated_text = "".join([segment[0] for segment in data[0] if segment and segment[0]])
+                        translated_text = unicodedata.normalize("NFKC", translated_text).strip()
+                        translated_text = re.sub(r"(?:\s*\.){2,}", "...", translated_text)
+                        results[b_id] = translated_text
+                    else:
+                        results[b_id] = original
+                except Exception as e:
+                    logger.warning(f"Google translate error for bubble {b_id}: {e}")
+                    results[b_id] = original
+
+        return results
+
     async def translate_bubbles_async(
         self,
         bubbles: List[DetectedBubble],
-        target_lang: str = "id"
+        target_lang: str = "id",
+        translator: str = "llm"
     ) -> List[DetectedBubble]:
         """
         Asynchronous batch translation of DetectedBubble objects in context.
         Populates bubble.translation for each bubble.
+        Supports both 'llm' (OpenAI/Ollama) and 'google' (Google Translate).
         """
         if not bubbles:
             return bubbles
@@ -171,7 +227,10 @@ class MangaTranslationService:
         if not dialogue_items:
             return bubbles
 
-        translations_map = await self._call_llm_async(dialogue_items, target_lang=target_lang)
+        if translator == "google":
+            translations_map = await self._call_google_async(dialogue_items, target_lang=target_lang)
+        else:
+            translations_map = await self._call_llm_async(dialogue_items, target_lang=target_lang)
 
         for b in bubbles:
             if b.id in translations_map:

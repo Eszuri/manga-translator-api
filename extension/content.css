@@ -1,0 +1,93 @@
+/* content.css — Manga Translator Styles (Simple & Clean) */
+
+/* ─── Image Wrapper ─────────────────────────────────────────────── */
+.manga-translator-wrapper {
+  position: relative !important;
+  display: inline-block !important;
+  max-width: 100%;
+}
+
+.manga-translator-wrapper img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* ─── Simple Loading Overlay ────────────────────────────────────── */
+.manga-translator-loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.manga-translator-loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #e94560;
+  border-radius: 50%;
+  animation: manga-translator-spin 0.8s linear infinite;
+}
+
+.manga-translator-loading-text {
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+}
+
+/* ─── Simple Progress Bar (Top of Page) ─────────────────────────── */
+.manga-translator-progress-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 32px;
+  background: rgba(18, 19, 28, 0.95);
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  box-sizing: border-box;
+  animation: manga-translator-slideDown 0.3s ease-out;
+}
+
+.manga-translator-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: #e94560;
+  z-index: -1;
+  transition: width 0.3s ease;
+}
+
+.manga-translator-progress-text {
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ─── Animations ────────────────────────────────────────────────── */
+@keyframes manga-translator-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes manga-translator-slideDown {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(0); }
+}

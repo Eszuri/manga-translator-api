@@ -1,8 +1,11 @@
+import asyncio
 import base64
 import io
+import json
 import time
 from typing import Literal
 from fastapi import APIRouter, UploadFile, File, Form, Response
+from fastapi.responses import StreamingResponse
 
 from app.api.v1.image_uploads import read_validated_image
 from app.core.config import settings
@@ -147,6 +150,10 @@ async def inpaint_and_translate_manga_page(
         "id",
         description="Target translation language code ('id' for Indonesian, 'en' for English)"
     ),
+    translator: Literal["llm", "google"] = Form(
+        "llm",
+        description="Translation engine: 'llm' (OpenAI/Ollama) or 'google' (Google Translate)"
+    ),
     detector_type: Literal["hybrid", "comic_text_detector", "contour"] = Form(
         "hybrid",
         description="Text/bubble detector engine ('hybrid' recommended)"
@@ -213,7 +220,9 @@ async def inpaint_and_translate_manga_page(
 
         # 4. Contextual Translation (LLM)
         trans_service = get_translation_service()
-        ordered_bubbles = await trans_service.translate_bubbles_async(ordered_bubbles, target_lang=target_lang)
+        ordered_bubbles = await trans_service.translate_bubbles_async(
+            ordered_bubbles, target_lang=target_lang, translator=translator
+        )
 
     # 5. Inpaint / Erase text
     inpaint_service = MangaInpaintingService()
@@ -259,3 +268,138 @@ async def inpaint_and_translate_manga_page(
         bubbles=ordered_bubbles,
         processing_time_ms=duration_ms
     )
+
+
+@router.post("/inpaint-stream")
+async def inpaint_stream_manga_page(
+    file: UploadFile = File(..., description="Manga page image file (JPEG, PNG, WebP)"),
+    target_lang: str = Form(
+        "id",
+        description="Target translation language code ('id' for Indonesian, 'en' for English)"
+    ),
+    translator: Literal["llm", "google"] = Form(
+        "llm",
+        description="Translation engine: 'llm' (OpenAI/Ollama) or 'google' (Google Translate)"
+    ),
+    detector_type: Literal["hybrid", "comic_text_detector", "contour"] = Form(
+        "hybrid",
+        description="Text/bubble detector engine ('hybrid' recommended)"
+    ),
+    reading_direction: Literal["rtl", "ltr"] = Form(
+        "rtl",
+        description="Reading direction ('rtl' for Japanese Manga, 'ltr' for Manhwa)"
+    ),
+    device: Literal["auto", "gpu", "cpu"] = Form(
+        "auto",
+        description="Compute device for detection and OCR: 'gpu' (DirectML), 'cpu', or 'auto'"
+    ),
+    typeset: bool = Form(
+        True,
+        description="Whether to typeset translated text into bubbles"
+    ),
+    font_scale: float = Form(
+        1.0,
+        description="Font size multiplier (default: 1.0)"
+    ),
+    all_caps: bool = Form(
+        True,
+        description="Render dialogue text in comic uppercase (default: True)"
+    )
+):
+    """
+    Streaming inpainting & typesetting endpoint:
+    Yields real-time NDJSON events for each stage (detect, ocr, translate, inpaint, render, done).
+    """
+    image = await read_validated_image(file)
+
+    async def stream_generator():
+        start_time = time.perf_counter()
+        try:
+            # Stage 1: Detection
+            yield json.dumps({"stage": "detect", "message": "Mendeteksi bubble teks..."}) + "\n"
+            await asyncio.sleep(0.01)
+
+            detector = get_detector_instance(detector_type, device)
+            detected = detector.detect(image)
+            ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
+
+            # Neural segmentation mask extraction
+            seg_mask = None
+            if detector_type in ("hybrid", "comic_text_detector"):
+                comic_det = getattr(detector, "comic_detector", detector)
+                if hasattr(comic_det, "detect_raw") and hasattr(comic_det, "get_unletterboxed_seg"):
+                    try:
+                        blk, seg, det, r, (dw, dh) = comic_det.detect_raw(image)
+                        seg_mask = comic_det.get_unletterboxed_seg(seg, image.width, image.height, dw, dh)
+                    except Exception:
+                        seg_mask = None
+
+            # Stage 2: OCR & Stage 3: Translation
+            if typeset and ordered_bubbles:
+                yield json.dumps({
+                    "stage": "ocr",
+                    "message": f"Membaca teks OCR ({len(ordered_bubbles)} bubble)...",
+                    "total_bubbles": len(ordered_bubbles)
+                }) + "\n"
+                await asyncio.sleep(0.01)
+
+                ocr_service = get_ocr_service(device=device)
+                ordered_bubbles = ocr_service.recognize_all_bubbles(image, ordered_bubbles)
+
+                yield json.dumps({
+                    "stage": "translate",
+                    "message": f"Menerjemahkan {len(ordered_bubbles)} dialog...",
+                    "total_bubbles": len(ordered_bubbles)
+                }) + "\n"
+                await asyncio.sleep(0.01)
+
+                trans_service = get_translation_service()
+                ordered_bubbles = await trans_service.translate_bubbles_async(
+                    ordered_bubbles, target_lang=target_lang, translator=translator
+                )
+            else:
+                yield json.dumps({
+                    "stage": "ocr",
+                    "message": "Tidak ada bubble teks ditemukan...",
+                    "total_bubbles": 0
+                }) + "\n"
+                await asyncio.sleep(0.01)
+
+            # Stage 4: Inpainting / Text Erasure
+            yield json.dumps({"stage": "inpaint", "message": "Menghapus teks asli (Inpainting)..."}) + "\n"
+            await asyncio.sleep(0.01)
+
+            inpaint_service = MangaInpaintingService()
+            inpainted_img = inpaint_service.inpaint(image, seg_mask=seg_mask, bubbles=ordered_bubbles)
+
+            # Stage 5: Typesetting & Rendering
+            yield json.dumps({"stage": "render", "message": "Rendering & typesetting teks..."}) + "\n"
+            await asyncio.sleep(0.01)
+
+            if typeset and ordered_bubbles:
+                typeset_service = MangaTypesettingService(all_caps=all_caps)
+                final_img = typeset_service.typeset(inpainted_img, ordered_bubbles, font_scale=font_scale)
+            else:
+                final_img = inpainted_img
+
+            if final_img.mode != "RGB":
+                final_img = final_img.convert("RGB")
+
+            out_buf = io.BytesIO()
+            final_img.save(out_buf, format="JPEG", quality=95)
+            img_b64 = base64.b64encode(out_buf.getvalue()).decode("utf-8")
+
+            duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            yield json.dumps({
+                "stage": "done",
+                "message": "Selesai",
+                "image_base64": f"data:image/jpeg;base64,{img_b64}",
+                "total_detected": len(ordered_bubbles),
+                "duration_ms": duration_ms
+            }) + "\n"
+
+        except Exception as e:
+            yield json.dumps({"stage": "error", "message": str(e)}) + "\n"
+
+    return StreamingResponse(stream_generator(), media_type="application/x-ndjson")
+

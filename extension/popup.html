@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manga Translator</title>
+  <style>
+    :root {
+      --bg: #12131c;
+      --card: #1c1e2d;
+      --accent: #e94560;
+      --accent-hover: #ff5270;
+      --text: #ffffff;
+      --text-muted: #8b8ea4;
+      --green: #2ecc71;
+      --red: #e74c3c;
+      --border: #282b3f;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    body {
+      width: 280px;
+      background: var(--bg);
+      color: var(--text);
+      padding: 14px;
+      font-size: 13px;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .title-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .title-box h1 {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      padding: 3px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--red);
+    }
+
+    .status-dot.online {
+      background: var(--green);
+      box-shadow: 0 0 6px rgba(46, 204, 113, 0.6);
+    }
+
+    /* Merged Site & Status Card */
+    .site-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 12px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .site-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .site-domain {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .site-status {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      transition: color 0.2s;
+    }
+
+    .site-status.disabled {
+      color: var(--text-muted);
+    }
+
+    /* Toggle Switch */
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #35384e;
+      transition: .25s ease;
+      border-radius: 20px;
+    }
+
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .25s ease;
+      border-radius: 50%;
+    }
+
+    input:checked + .toggle-slider {
+      background-color: var(--accent);
+    }
+
+    input:checked + .toggle-slider:before {
+      transform: translateX(16px);
+    }
+
+    /* Form Settings */
+    .setting-row {
+      margin-bottom: 10px;
+    }
+
+    .setting-label {
+      display: block;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+      letter-spacing: 0.3px;
+    }
+
+    select, input[type="text"] {
+      width: 100%;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 7px 9px;
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    select:focus, input[type="text"]:focus {
+      border-color: var(--accent);
+    }
+
+    /* Primary Action */
+    .btn-action {
+      width: 100%;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 9px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.2s;
+    }
+
+    .btn-action:hover {
+      background: var(--accent-hover);
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <div class="title-box">
+      <span style="font-size: 16px;">🎌</span>
+      <h1>Manga Translator</h1>
+    </div>
+    <div class="status-badge">
+      <div class="status-dot" id="serverStatusDot"></div>
+      <span id="serverStatusText">Connecting</span>
+    </div>
+  </div>
+
+  <!-- Merged Site & Status Card -->
+  <div class="site-card">
+    <div class="site-info">
+      <span class="site-domain" id="siteHostname">Memuat web...</span>
+      <span class="site-status disabled" id="statStatus">Nonaktif</span>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="siteToggle">
+      <span class="toggle-slider"></span>
+    </label>
+  </div>
+
+  <!-- Settings -->
+  <div class="setting-row">
+    <label class="setting-label" for="translator">Penerjemah</label>
+    <select id="translator">
+      <option value="google">Google Translate</option>
+      <option value="llm">LLM API</option>
+    </select>
+  </div>
+
+  <div class="setting-row">
+    <label class="setting-label" for="targetLang">Bahasa</label>
+    <select id="targetLang">
+      <option value="id">Indonesia</option>
+      <option value="en">English</option>
+    </select>
+  </div>
+
+  <div class="setting-row">
+    <label class="setting-label" for="readingDirection">Arah Baca</label>
+    <select id="readingDirection">
+      <option value="rtl">Manga (RTL)</option>
+      <option value="ltr">Manhwa (LTR)</option>
+    </select>
+  </div>
+
+  <div class="setting-row">
+    <label class="setting-label" for="apiUrl">Server</label>
+    <input type="text" id="apiUrl" value="http://127.0.0.1:8000">
+  </div>
+
+  <!-- Action Button -->
+  <button class="btn-action" id="btnTranslate">
+    <span>⚡</span> Scan Ulang
+  </button>
+
+  <script src="popup.js"></script>
+</body>
+</html>
