@@ -138,7 +138,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           formData.append('file', blob, 'image.jpg');
         }
         for (const [key, value] of Object.entries(request.data)) {
-          if (key !== 'fileData' && key !== 'mimeType' && key !== 'imageSrc') {
+          if (key !== 'fileData' && key !== 'mimeType' && key !== 'imageSrc' && key !== 'jobId') {
             formData.append(key, value);
           }
         }
@@ -196,6 +196,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                       action: 'pipelineProgress',
                       stage: data.stage,
                       message: data.message,
+                      jobId: request.data.jobId,
                       imageSrc: request.data.imageSrc,
                       totalBubbles: data.total_bubbles
                     }).catch(() => {});

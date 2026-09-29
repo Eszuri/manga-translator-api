@@ -2,7 +2,8 @@ class MangaTranslator {
   constructor() {
     this.processedImages = new Set();
     this.processingQueue = [];
-    this.isProcessing = false;
+    this.maxConcurrentJobs = 2;
+    this.activeJobs = new Map();
     this.settings = null;
     this.totalProcessed = 0;
     this.totalImages = 0;
@@ -66,9 +67,15 @@ class MangaTranslator {
           if (this.isEnabled) {
             this.scanAndProcess();
           } else {
-            this.hideProgressBar();
-            this.isProcessing = false;
+            this.processingQueue.forEach((img) => this.processedImages.delete(img));
             this.processingQueue = [];
+            this.activeJobs.forEach(({ img }) => {
+              this.finishImageLoading(null, img);
+              delete img.dataset.mtJobId;
+              this.processedImages.delete(img);
+            });
+            this.activeJobs.clear();
+            this.hideProgressBar();
           }
           sendResponse({ success: true });
           break;
@@ -148,11 +155,15 @@ class MangaTranslator {
     }
 
     await this.waitForAllImagesToLoad();
+    if (!this.isEnabled) {
+      this.isScanning = false;
+      return;
+    }
 
     const allImgs = Array.from(document.querySelectorAll('img'));
     const mangaImgs = allImgs.filter(img => !this.processedImages.has(img) && this.isMangaImage(img));
 
-    if (mangaImgs.length === 0 && this.processingQueue.length === 0 && !this.isProcessing) {
+    if (mangaImgs.length === 0 && this.processingQueue.length === 0 && this.activeJobs.size === 0) {
       this.isScanning = false;
       this.hideProgressBar();
       return;
@@ -172,7 +183,7 @@ class MangaTranslator {
     }
 
     this.isScanning = false;
-    this.processNext();
+    this.pumpQueue();
   }
 
   async waitForAllImagesToLoad() {
@@ -223,45 +234,75 @@ class MangaTranslator {
     return img.naturalWidth > 300 && img.naturalHeight > 400;
   }
 
-  async processNext() {
-    if (this.isProcessing) return;
-    if (this.processingQueue.length === 0) {
-      this.hideProgressBar();
-      return;
+  pumpQueue() {
+    if (!this.isEnabled) return;
+
+    while (this.activeJobs.size < this.maxConcurrentJobs && this.processingQueue.length > 0) {
+      this.startTranslationJob(this.processingQueue.shift());
     }
 
-    this.isProcessing = true;
-    const img = this.processingQueue.shift();
-    this.currentProcessingImg = img;
+    if (this.processingQueue.length === 0 && this.activeJobs.size === 0) {
+      this.hideProgressBar();
+    }
+  }
+
+  createJobId() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  async startTranslationJob(img) {
+    const jobId = this.createJobId();
+    const job = { id: jobId, img, originalSrc: img.currentSrc || img.src };
+    this.activeJobs.set(jobId, job);
+    img.dataset.mtJobId = jobId;
 
     this.showProgressBar();
     this.updateProgressBar();
     this.beginImageLoading(null, img);
 
     try {
-      await this.translateImage(img);
-      this.totalProcessed++;
+      const result = await this.translateImage(job);
+      const isCurrentJob = this.activeJobs.get(jobId) === job && img.dataset.mtJobId === jobId;
+      if (!isCurrentJob) return;
+
+      if (result.success && result.data) {
+        img.src = result.data;
+        this.totalProcessed++;
+        chrome.storage.local.set({
+          lastTranslationStats: {
+            bubblesDetected: result.totalDetected || 0,
+            processingTimeMs: result.durationMs || 0,
+            status: `${this.totalProcessed}/${this.totalImages}`
+          }
+        });
+      } else {
+        console.warn('[MangaTranslator] Inpaint failed:', result.error);
+      }
     } catch (e) {
       console.error('[MangaTranslator] Failed to translate image:', e);
+    } finally {
+      const ownsJob = this.activeJobs.get(jobId) === job;
+      if (ownsJob) {
+        this.activeJobs.delete(jobId);
+        if (img.dataset.mtJobId === jobId) delete img.dataset.mtJobId;
+        this.finishImageLoading(null, img);
+      }
+      this.updateProgressBar();
+      this.pumpQueue();
     }
-
-    this.updateProgressBar();
-    this.finishImageLoading(null, img);
-    this.currentProcessingImg = null;
-    this.isProcessing = false;
-
-    this.processNext();
   }
 
-  async translateImage(img) {
+  async translateImage(job) {
     const settings = this.settings || await this.loadSettings();
-    const fileData = await this.getImageDataUrl(img);
+    const fileData = await this.getImageDataUrl(job.img);
 
-    const result = await this.sendMessage({
+    return this.sendMessage({
       action: 'inpaintPageStream',
       data: {
         fileData: fileData,
-        imageSrc: img.src,
+        imageSrc: job.originalSrc,
+        jobId: job.id,
         mimeType: 'image/jpeg',
         target_lang: settings.targetLang,
         translator: settings.translator || 'llm',
@@ -273,27 +314,14 @@ class MangaTranslator {
         all_caps: String(settings.allCaps)
       }
     });
-
-    if (result.success && result.data) {
-      img.src = result.data;
-
-      chrome.storage.local.set({
-        lastTranslationStats: {
-          bubblesDetected: result.totalDetected || this.totalProcessed,
-          processingTimeMs: result.durationMs || 0,
-          status: `${this.totalProcessed + 1}/${this.totalImages}`
-        }
-      });
-    } else {
-      console.warn('[MangaTranslator] Inpaint failed:', result.error);
-    }
   }
 
   handlePipelineProgress(request) {
     if (this.isMinimalLoadingStyle()) return;
 
-    const img = this.currentProcessingImg || this.findImageBySrc(request.imageSrc);
-    if (!img) return;
+    const job = this.activeJobs.get(request.jobId);
+    if (!job || job.img.dataset.mtJobId !== request.jobId) return;
+    const { img } = job;
 
     const wrapper = img.closest('.manga-translator-wrapper');
     if (!wrapper) return;
@@ -437,7 +465,7 @@ class MangaTranslator {
   }
 
   hasActiveBatchLoading() {
-    return this.isEnabled && (this.isScanning || this.isProcessing || this.processingQueue.length > 0);
+    return this.isEnabled && (this.isScanning || this.activeJobs.size > 0 || this.processingQueue.length > 0);
   }
 
   hasActiveLoading() {
@@ -512,7 +540,7 @@ class MangaTranslator {
         loading.style.display = 'none';
       });
       this.hideAllMinimalLoaders();
-      if (this.currentProcessingImg) this.showImageLoading(null, this.currentProcessingImg);
+      this.activeJobs.forEach(({ img }) => this.showImageLoading(null, img));
       this.contextMenuLoadingSources.forEach(({ img }, srcUrl) => this.showImageLoading(srcUrl, img));
       return;
     }
@@ -522,7 +550,7 @@ class MangaTranslator {
 
     if (this.hasActiveBatchLoading()) {
       this.showProgressBar();
-      if (this.isScanning && !this.isProcessing && this.processingQueue.length === 0) {
+      if (this.isScanning && this.activeJobs.size === 0 && this.processingQueue.length === 0) {
         const text = this.progressBar.querySelector('.manga-translator-progress-text');
         if (text) text.textContent = '⏳ Menunggu semua gambar di halaman termuat...';
       } else {
@@ -530,7 +558,7 @@ class MangaTranslator {
       }
     }
 
-    if (this.currentProcessingImg) this.showImageLoading(null, this.currentProcessingImg);
+    this.activeJobs.forEach(({ img }) => this.showImageLoading(null, img));
     this.contextMenuLoadingSources.forEach(({ img }, srcUrl) => this.showImageLoading(srcUrl, img));
   }
 
@@ -540,7 +568,7 @@ class MangaTranslator {
     const fill = this.progressBar.querySelector('.manga-translator-progress-fill');
 
     const remaining = this.processingQueue.length;
-    const total = this.totalProcessed + remaining + (this.isProcessing ? 1 : 0);
+    const total = this.totalImages || this.totalProcessed + remaining + this.activeJobs.size;
     const pct = total === 0 ? 0 : (this.totalProcessed / total) * 100;
 
     text.textContent = `Translated ${this.totalProcessed}/${total} pages`;
