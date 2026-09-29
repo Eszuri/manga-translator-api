@@ -13,12 +13,16 @@ class MangaTranslator {
     this.progressBarHideTimer = null;
     this.contextMenuLoadingSources = new Map();
     this.imageLoadingCounts = new WeakMap();
+    this.scanDebounceTimer = null;
 
     this.init();
   }
 
   async init() {
     await this.loadSettings();
+    if (window.MangaTranslationCache) {
+      window.MangaTranslationCache.pruneOldCache(7).catch(() => {});
+    }
     this.setupMessageListener();
     this.setupKeyboardShortcuts();
 
@@ -58,7 +62,13 @@ class MangaTranslator {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       switch (request.action) {
         case 'translateAllImages':
-          this.scanAndProcess();
+          (async () => {
+            if (window.MangaTranslationCache) {
+              await window.MangaTranslationCache.clearPageCache(window.location.href);
+            }
+            this.restoreAllOriginals();
+            this.scanAndProcess({ bypassCache: true });
+          })();
           sendResponse({ success: true, status: 'started' });
           break;
 
@@ -143,7 +153,7 @@ class MangaTranslator {
     });
   }
 
-  async scanAndProcess() {
+  async scanAndProcess(options = {}) {
     if (!this.isEnabled) return;
     if (this.isScanning) return;
     this.isScanning = true;
@@ -169,19 +179,49 @@ class MangaTranslator {
       return;
     }
 
-    mangaImgs.forEach(img => {
+    const settings = this.settings || await this.loadSettings();
+    let restoredFromCache = 0;
+
+    for (const img of mangaImgs) {
+      const originalSrc = img.currentSrc || img.src || img.dataset.src || img.dataset.lazySrc;
+      if (!img.dataset.mtOriginalSrc) {
+        img.dataset.mtOriginalSrc = originalSrc;
+      }
+
+      if (!options.bypassCache && window.MangaTranslationCache) {
+        const cacheKey = window.MangaTranslationCache.buildCacheKey(settings, originalSrc);
+        const cached = await window.MangaTranslationCache.getCachedTranslation(cacheKey);
+        if (cached && cached.translatedData) {
+          img.src = cached.translatedData;
+          this.processedImages.add(img);
+          this.wrapImage(img);
+          this.totalProcessed++;
+          restoredFromCache++;
+          continue;
+        }
+      }
+
       this.processedImages.add(img);
       this.wrapImage(img);
       this.processingQueue.push(img);
-    });
+    }
 
     this.totalImages = this.processedImages.size;
 
     if (this.progressBar) {
       const pText = this.progressBar.querySelector('.manga-translator-progress-text');
-      if (pText) pText.textContent = `Semua gambar termuat (${this.totalImages} halaman) • Memulai...`;
+      if (pText) {
+        if (this.processingQueue.length === 0 && this.activeJobs.size === 0) {
+          pText.textContent = `Semua gambar dipulihkan dari cache (${this.totalProcessed} halaman) ✅`;
+        } else if (restoredFromCache > 0) {
+          pText.textContent = `${restoredFromCache} dipulihkan dari cache • Memproses sisa (${this.processingQueue.length} halaman)...`;
+        } else {
+          pText.textContent = `Semua gambar termuat (${this.totalImages} halaman) • Memulai...`;
+        }
+      }
     }
 
+    this.updateProgressBar();
     this.isScanning = false;
     this.pumpQueue();
   }
@@ -231,7 +271,19 @@ class MangaTranslator {
   }
 
   isMangaImage(img) {
-    return img.naturalWidth > 300 && img.naturalHeight > 400;
+    return img.complete && img.naturalWidth > 300 && img.naturalHeight > 400;
+  }
+
+  getCurrentImageSource(img) {
+    return img.currentSrc || img.src || img.dataset.src || img.dataset.lazySrc || '';
+  }
+
+  scheduleScan(delayMs = 300) {
+    clearTimeout(this.scanDebounceTimer);
+    this.scanDebounceTimer = setTimeout(() => {
+      this.scanDebounceTimer = null;
+      if (this.isEnabled) this.scanAndProcess();
+    }, delayMs);
   }
 
   pumpQueue() {
@@ -253,7 +305,7 @@ class MangaTranslator {
 
   async startTranslationJob(img) {
     const jobId = this.createJobId();
-    const job = { id: jobId, img, originalSrc: img.currentSrc || img.src };
+    const job = { id: jobId, img, originalSrc: this.getCurrentImageSource(img) };
     this.activeJobs.set(jobId, job);
     img.dataset.mtJobId = jobId;
 
@@ -266,9 +318,31 @@ class MangaTranslator {
       const isCurrentJob = this.activeJobs.get(jobId) === job && img.dataset.mtJobId === jobId;
       if (!isCurrentJob) return;
 
+      if (this.getCurrentImageSource(img) !== job.originalSrc) {
+        this.processedImages.delete(img);
+        this.scheduleScan();
+        console.warn('[MangaTranslator] Image source changed while translating; stale result ignored.');
+        return;
+      }
+
       if (result.success && result.data) {
         img.src = result.data;
         this.totalProcessed++;
+
+        if (window.MangaTranslationCache) {
+          const settings = this.settings || await this.loadSettings();
+          window.MangaTranslationCache.saveCachedTranslation({
+            cacheKey: window.MangaTranslationCache.buildCacheKey(settings, job.originalSrc),
+            pageUrl: window.location.href,
+            originalSrc: job.originalSrc,
+            translatedData: result.data,
+            targetLang: settings.targetLang,
+            translator: settings.translator,
+            readingDirection: settings.readingDirection,
+            timestamp: Date.now()
+          }).catch(err => console.warn('[MangaTranslator] Failed to cache translation:', err));
+        }
+
         chrome.storage.local.set({
           lastTranslationStats: {
             bubblesDetected: result.totalDetected || 0,
@@ -280,6 +354,10 @@ class MangaTranslator {
         console.warn('[MangaTranslator] Inpaint failed:', result.error);
       }
     } catch (e) {
+      if (e && (e.code === 'IMAGE_NOT_READY' || e.code === 'IMAGE_SOURCE_CHANGED')) {
+        this.processedImages.delete(img);
+        this.scheduleScan();
+      }
       console.error('[MangaTranslator] Failed to translate image:', e);
     } finally {
       const ownsJob = this.activeJobs.get(jobId) === job;
@@ -295,7 +373,7 @@ class MangaTranslator {
 
   async translateImage(job) {
     const settings = this.settings || await this.loadSettings();
-    const fileData = await this.getImageDataUrl(job.img);
+    const fileData = await this.getImageDataUrl(job.img, job.originalSrc);
 
     return this.sendMessage({
       action: 'inpaintPageStream',
@@ -432,7 +510,20 @@ class MangaTranslator {
   applyInpaintBySrc(srcUrl, dataUrl) {
     const img = this.findImageBySrc(srcUrl);
     if (img) {
+      if (!img.dataset.mtOriginalSrc) img.dataset.mtOriginalSrc = srcUrl;
       img.src = dataUrl;
+      if (window.MangaTranslationCache) {
+        window.MangaTranslationCache.saveCachedTranslation({
+          cacheKey: window.MangaTranslationCache.buildCacheKey(this.settings, srcUrl),
+          pageUrl: window.location.href,
+          originalSrc: srcUrl,
+          translatedData: dataUrl,
+          targetLang: (this.settings && this.settings.targetLang) || 'id',
+          translator: (this.settings && this.settings.translator) || 'google',
+          readingDirection: (this.settings && this.settings.readingDirection) || 'rtl',
+          timestamp: Date.now()
+        }).catch(() => {});
+      }
     }
   }
 
@@ -597,11 +688,14 @@ class MangaTranslator {
   }
 
   setupMutationObserver() {
-    let debounceTimer = null;
     const observer = new MutationObserver((mutations) => {
       if (!this.isEnabled) return;
       let hasNewImages = false;
       for (const mutation of mutations) {
+        if (mutation.type === 'attributes' && mutation.target.nodeName === 'IMG') {
+          hasNewImages = true;
+          break;
+        }
         for (const node of mutation.addedNodes) {
           if (node.nodeName === 'IMG' || (node.querySelectorAll && node.querySelectorAll('img').length > 0)) {
             hasNewImages = true;
@@ -611,23 +705,114 @@ class MangaTranslator {
         if (hasNewImages) break;
       }
       if (hasNewImages) {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => this.scanAndProcess(), 1000);
+        this.scheduleScan(1000);
       }
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['src', 'srcset']
+    });
+
+    document.addEventListener('load', (event) => {
+      const img = event.target;
+      if (
+        this.isEnabled &&
+        img instanceof HTMLImageElement &&
+        !img.closest('.manga-translator-minimal-loader') &&
+        !this.processedImages.has(img)
+      ) {
+        this.scheduleScan();
+      }
+    }, true);
   }
 
-  async getImageDataUrl(img) {
+  createImageReadinessError(message, code) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+  }
+
+  async waitForImageReady(img, expectedSrc, timeoutMs = 20000) {
+    const initialSrc = this.getCurrentImageSource(img);
+    if (!initialSrc || (expectedSrc && initialSrc !== expectedSrc)) {
+      throw this.createImageReadinessError(
+        'Image source changed before it was ready.',
+        'IMAGE_SOURCE_CHANGED'
+      );
+    }
+
+    if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) {
+      await new Promise((resolve, reject) => {
+        let timeoutId = null;
+        const cleanup = () => {
+          img.removeEventListener('load', onLoad);
+          img.removeEventListener('error', onError);
+          if (timeoutId) clearTimeout(timeoutId);
+        };
+        const onLoad = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = () => {
+          cleanup();
+          reject(this.createImageReadinessError('Image failed to load.', 'IMAGE_NOT_READY'));
+        };
+
+        img.addEventListener('load', onLoad, { once: true });
+        img.addEventListener('error', onError, { once: true });
+        timeoutId = setTimeout(() => {
+          cleanup();
+          reject(this.createImageReadinessError('Timed out waiting for image load.', 'IMAGE_NOT_READY'));
+        }, timeoutMs);
+      });
+    }
+
+    try {
+      await img.decode();
+    } catch (error) {
+      throw this.createImageReadinessError(
+        `Image could not be decoded: ${error.message}`,
+        'IMAGE_NOT_READY'
+      );
+    }
+
+    const decodedSrc = this.getCurrentImageSource(img);
+    if (expectedSrc && decodedSrc !== expectedSrc) {
+      throw this.createImageReadinessError(
+        'Image source changed while it was decoding.',
+        'IMAGE_SOURCE_CHANGED'
+      );
+    }
+    if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) {
+      throw this.createImageReadinessError('Image is not fully decoded.', 'IMAGE_NOT_READY');
+    }
+    return decodedSrc;
+  }
+
+  async getImageDataUrl(img, expectedSrc) {
+    const decodedSrc = await this.waitForImageReady(img, expectedSrc);
     try {
       const canvas = document.createElement('canvas');
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
       const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas 2D context is unavailable.');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
-      return canvas.toDataURL('image/jpeg', 0.9);
+      const imageDataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      if (this.getCurrentImageSource(img) !== decodedSrc) {
+        throw this.createImageReadinessError(
+          'Image source changed while canvas was being created.',
+          'IMAGE_SOURCE_CHANGED'
+        );
+      }
+      return imageDataUrl;
     } catch (e) {
-      const result = await this.sendMessage({ action: 'fetchImage', url: img.src });
+      if (e && (e.code === 'IMAGE_NOT_READY' || e.code === 'IMAGE_SOURCE_CHANGED')) throw e;
+      const result = await this.sendMessage({ action: 'fetchImage', url: decodedSrc });
       if (result.success) return result.data;
       throw new Error('Cannot access image: ' + e.message);
     }
@@ -643,6 +828,22 @@ class MangaTranslator {
         }
       });
     });
+  }
+
+  restoreAllOriginals() {
+    this.processingQueue = [];
+    this.activeJobs.forEach(({ img }) => {
+      this.finishImageLoading(null, img);
+      delete img.dataset.mtJobId;
+    });
+    this.activeJobs.clear();
+    this.hideProgressBar();
+
+    document.querySelectorAll('img[data-mt-original-src]').forEach(img => {
+      img.src = img.dataset.mtOriginalSrc;
+    });
+    this.processedImages.clear();
+    this.totalProcessed = 0;
   }
 }
 

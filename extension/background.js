@@ -236,7 +236,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       else if (request.action === 'fetchImage') {
         try {
           const imgRes = await fetch(request.url);
+          if (!imgRes.ok) {
+            throw new Error(`Image request failed with HTTP ${imgRes.status}`);
+          }
           const blob = await imgRes.blob();
+          if (!blob.type.startsWith('image/')) {
+            throw new Error(`Unexpected image response type: ${blob.type || 'unknown'}`);
+          }
           const reader = new FileReader();
           const dataUrl = await new Promise((resolve, reject) => {
             reader.onloadend = () => resolve(reader.result);
