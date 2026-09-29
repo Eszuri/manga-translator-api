@@ -29,12 +29,32 @@ const MangaTranslationCache = {
     return this._dbPromise;
   },
 
-  buildCacheKey(settings, originalSrc) {
+  normalizeUrlForKey(value, keepSearch = false) {
+    if (!value) return '';
+
+    try {
+      const url = new URL(value, window.location.href);
+      return `${url.origin}${url.pathname}${keepSearch ? url.search : ''}`;
+    } catch (error) {
+      const withoutHash = String(value).split('#')[0];
+      return keepSearch ? withoutHash : withoutHash.split('?')[0];
+    }
+  },
+
+  buildCacheKey(settings, originalSrc, pageUrl = window.location.href, imageIndex = -1) {
     const lang = (settings && settings.targetLang) || 'id';
     const translator = (settings && settings.translator) || 'google';
     const direction = (settings && settings.readingDirection) || 'rtl';
-    const source = originalSrc || '';
-    return `v2_${lang}_${translator}_${direction}_${source}`;
+    const page = this.normalizeUrlForKey(pageUrl, true);
+    const source = this.normalizeUrlForKey(originalSrc);
+    return `v3_${lang}_${translator}_${direction}_${page}_${imageIndex}_${source}`;
+  },
+
+  buildLegacyCacheKey(settings, originalSrc) {
+    const lang = (settings && settings.targetLang) || 'id';
+    const translator = (settings && settings.translator) || 'google';
+    const direction = (settings && settings.readingDirection) || 'rtl';
+    return `v2_${lang}_${translator}_${direction}_${originalSrc || ''}`;
   },
 
   async getCachedTranslation(cacheKey) {
@@ -54,9 +74,75 @@ const MangaTranslationCache = {
     }
   },
 
-  async saveCachedTranslation(entry) {
-    if (!entry || !entry.cacheKey || !entry.translatedData) return;
+  async getCachedTranslations(cacheKeys) {
+    const uniqueKeys = [...new Set((cacheKeys || []).filter(Boolean))];
+    if (uniqueKeys.length === 0) return new Map();
+
     try {
+      const db = await this.openDB();
+      return await new Promise((resolve) => {
+        const tx = db.transaction(this.storeName, 'readonly');
+        const store = tx.objectStore(this.storeName);
+        const results = new Map();
+
+        uniqueKeys.forEach((cacheKey) => {
+          const request = store.get(cacheKey);
+          request.onsuccess = () => {
+            if (request.result) results.set(cacheKey, request.result);
+          };
+        });
+
+        tx.oncomplete = () => resolve(results);
+        tx.onerror = () => resolve(new Map());
+        tx.onabort = () => resolve(new Map());
+      });
+    } catch (e) {
+      console.warn('[MangaTranslationCache] Bulk read error:', e);
+      return new Map();
+    }
+  },
+
+  dataUrlToBlob(dataUrl) {
+    if (!dataUrl || !dataUrl.startsWith('data:')) return null;
+
+    try {
+      const separatorIndex = dataUrl.indexOf(',');
+      if (separatorIndex < 0) return null;
+
+      const header = dataUrl.slice(0, separatorIndex);
+      const encoded = dataUrl.slice(separatorIndex + 1);
+      const mimeType = header.match(/^data:([^;,]+)/)?.[1] || 'image/png';
+      const binary = header.includes(';base64') ? atob(encoded) : decodeURIComponent(encoded);
+      const bytes = new Uint8Array(binary.length);
+
+      for (let index = 0; index < binary.length; index++) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+
+      return new Blob([bytes], { type: mimeType });
+    } catch (e) {
+      console.warn('[MangaTranslationCache] Blob conversion error:', e);
+      return null;
+    }
+  },
+
+  createImageUrl(entry) {
+    if (entry && entry.translatedBlob instanceof Blob) {
+      return URL.createObjectURL(entry.translatedBlob);
+    }
+    return (entry && entry.translatedData) || null;
+  },
+
+  revokeImageUrl(imageUrl) {
+    if (imageUrl && imageUrl.startsWith('blob:')) URL.revokeObjectURL(imageUrl);
+  },
+
+  async saveCachedTranslation(entry) {
+    if (!entry || !entry.cacheKey || (!entry.translatedData && !entry.translatedBlob)) return;
+    try {
+      const translatedBlob = entry.translatedBlob || this.dataUrlToBlob(entry.translatedData);
+      if (!translatedBlob) return;
+
       const db = await this.openDB();
       return new Promise((resolve, reject) => {
         const tx = db.transaction(this.storeName, 'readwrite');
@@ -65,7 +151,9 @@ const MangaTranslationCache = {
           cacheKey: entry.cacheKey,
           pageUrl: entry.pageUrl || window.location.href,
           originalSrc: entry.originalSrc,
-          translatedData: entry.translatedData,
+          translatedBlob,
+          originalWidth: Number(entry.originalWidth) || 0,
+          originalHeight: Number(entry.originalHeight) || 0,
           targetLang: entry.targetLang || 'id',
           translator: entry.translator || 'google',
           readingDirection: entry.readingDirection || 'rtl',
