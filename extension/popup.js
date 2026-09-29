@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const translator = document.getElementById('translator');
   const targetLang = document.getElementById('targetLang');
   const readingDirection = document.getElementById('readingDirection');
+  const loadingStyle = document.getElementById('loadingStyle');
   const apiUrl = document.getElementById('apiUrl');
   const btnTranslate = document.getElementById('btnTranslate');
 
@@ -71,7 +72,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  [translator, targetLang, readingDirection, apiUrl].forEach(el => {
+  [translator, targetLang, readingDirection, loadingStyle, apiUrl].forEach(el => {
     el.addEventListener('change', saveSettings);
   });
 
@@ -136,12 +137,14 @@ document.addEventListener('DOMContentLoaded', () => {
       fontScale: 1.0,
       allCaps: true,
       autoTranslate: true,
-      translator: 'google'
+      translator: 'google',
+      loadingStyle: 'default'
     }, (items) => {
       apiUrl.value = items.apiUrl;
       targetLang.value = items.targetLang;
       readingDirection.value = items.readingDirection;
       translator.value = items.translator || 'google';
+      loadingStyle.value = items.loadingStyle === 'minimal' ? 'minimal' : 'default';
     });
   }
 
@@ -151,6 +154,7 @@ document.addEventListener('DOMContentLoaded', () => {
       targetLang: targetLang.value,
       readingDirection: readingDirection.value,
       translator: translator.value,
+      loadingStyle: loadingStyle.value,
       translationMode: 'inpaint',
       autoTranslate: true
     };

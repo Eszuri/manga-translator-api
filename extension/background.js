@@ -9,6 +9,7 @@ const DEFAULT_SETTINGS = {
   allCaps: true,
   autoTranslate: true,
   translator: 'google',
+  loadingStyle: 'default',
   enabledDomains: []
 };
 

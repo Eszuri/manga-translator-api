@@ -9,6 +9,9 @@ class MangaTranslator {
     this.isScanning = false;
     this.isEnabled = false;
     this.progressBar = null;
+    this.progressBarHideTimer = null;
+    this.contextMenuLoadingSources = new Map();
+    this.imageLoadingCounts = new WeakMap();
 
     this.init();
   }
@@ -41,6 +44,7 @@ class MangaTranslator {
         device: 'auto',
         fontScale: 1.0,
         allCaps: true,
+        loadingStyle: 'default',
         enabledDomains: []
       }, (items) => {
         this.settings = items;
@@ -88,7 +92,7 @@ class MangaTranslator {
           break;
 
         case 'contextMenuTranslateStart':
-          this.showImageLoading(request.srcUrl);
+          this.startContextMenuLoading(request.srcUrl);
           sendResponse({ success: true });
           break;
 
@@ -96,11 +100,12 @@ class MangaTranslator {
           if (request.result && request.result.success) {
             this.applyInpaintBySrc(request.srcUrl, request.result.data);
           }
+          this.finishContextMenuLoading(request.srcUrl);
           sendResponse({ success: true });
           break;
 
         case 'contextMenuTranslateError':
-          this.hideImageLoading(request.srcUrl);
+          this.finishContextMenuLoading(request.srcUrl);
           sendResponse({ success: true });
           break;
 
@@ -111,7 +116,11 @@ class MangaTranslator {
     });
 
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === 'sync') this.loadSettings();
+      if (area === 'sync') {
+        this.loadSettings().then(() => {
+          if (changes.loadingStyle) this.syncLoadingStyle();
+        });
+      }
     });
   }
 
@@ -144,8 +153,8 @@ class MangaTranslator {
     const mangaImgs = allImgs.filter(img => !this.processedImages.has(img) && this.isMangaImage(img));
 
     if (mangaImgs.length === 0 && this.processingQueue.length === 0 && !this.isProcessing) {
-      this.hideProgressBar();
       this.isScanning = false;
+      this.hideProgressBar();
       return;
     }
 
@@ -223,10 +232,11 @@ class MangaTranslator {
 
     this.isProcessing = true;
     const img = this.processingQueue.shift();
+    this.currentProcessingImg = img;
 
     this.showProgressBar();
     this.updateProgressBar();
-    this.showImageLoading(null, img);
+    this.beginImageLoading(null, img);
 
     try {
       await this.translateImage(img);
@@ -236,7 +246,8 @@ class MangaTranslator {
     }
 
     this.updateProgressBar();
-    this.hideImageLoading(null, img);
+    this.finishImageLoading(null, img);
+    this.currentProcessingImg = null;
     this.isProcessing = false;
 
     this.processNext();
@@ -245,7 +256,6 @@ class MangaTranslator {
   async translateImage(img) {
     const settings = this.settings || await this.loadSettings();
     const fileData = await this.getImageDataUrl(img);
-    this.currentProcessingImg = img;
 
     const result = await this.sendMessage({
       action: 'inpaintPageStream',
@@ -277,10 +287,11 @@ class MangaTranslator {
     } else {
       console.warn('[MangaTranslator] Inpaint failed:', result.error);
     }
-    this.currentProcessingImg = null;
   }
 
   handlePipelineProgress(request) {
+    if (this.isMinimalLoadingStyle()) return;
+
     const img = this.currentProcessingImg || this.findImageBySrc(request.imageSrc);
     if (!img) return;
 
@@ -314,6 +325,7 @@ class MangaTranslator {
   }
 
   wrapImage(img) {
+    if (!img.dataset.mtOriginalSrc) img.dataset.mtOriginalSrc = img.src;
     if (img.closest('.manga-translator-wrapper')) return;
 
     const wrapper = document.createElement('div');
@@ -329,19 +341,37 @@ class MangaTranslator {
     `;
     loading.style.display = 'none';
     wrapper.appendChild(loading);
+
+    const minimalLoading = document.createElement('div');
+    minimalLoading.className = 'manga-translator-minimal-loader';
+    minimalLoading.setAttribute('role', 'status');
+    minimalLoading.setAttribute('aria-label', 'Menerjemahkan manga');
+    minimalLoading.innerHTML = `<img src="${chrome.runtime.getURL('icons/icon.svg')}" alt="">`;
+    minimalLoading.style.display = 'none';
+    wrapper.appendChild(minimalLoading);
   }
 
   showImageLoading(srcUrl, imgEl) {
     const img = imgEl || this.findImageBySrc(srcUrl);
     if (!img) return;
-    const wrapper = img.closest('.manga-translator-wrapper');
-    if (wrapper) {
-      const loading = wrapper.querySelector('.manga-translator-loading');
-      if (loading) {
-        const text = loading.querySelector('.manga-translator-loading-text');
-        if (text) text.textContent = 'Deteksi bubble...';
-        loading.style.display = 'flex';
-      }
+    let wrapper = img.closest('.manga-translator-wrapper');
+    if (!wrapper) {
+      this.wrapImage(img);
+      wrapper = img.closest('.manga-translator-wrapper');
+    }
+    if (!wrapper) return;
+
+    if (this.isMinimalLoadingStyle()) {
+      const minimalLoading = wrapper.querySelector('.manga-translator-minimal-loader');
+      if (minimalLoading) minimalLoading.style.display = 'flex';
+      return;
+    }
+
+    const loading = wrapper.querySelector('.manga-translator-loading');
+    if (loading) {
+      const text = loading.querySelector('.manga-translator-loading-text');
+      if (text) text.textContent = 'Deteksi bubble...';
+      loading.style.display = 'flex';
     }
   }
 
@@ -349,10 +379,16 @@ class MangaTranslator {
     const img = imgEl || this.findImageBySrc(srcUrl);
     if (!img) return;
     const wrapper = img.closest('.manga-translator-wrapper');
-    if (wrapper) {
-      const loading = wrapper.querySelector('.manga-translator-loading');
-      if (loading) loading.style.display = 'none';
+    if (!wrapper) return;
+
+    if (this.isMinimalLoadingStyle()) {
+      const minimalLoading = wrapper.querySelector('.manga-translator-minimal-loader');
+      if (minimalLoading) minimalLoading.style.display = 'none';
+      return;
     }
+
+    const loading = wrapper.querySelector('.manga-translator-loading');
+    if (loading) loading.style.display = 'none';
   }
 
   findImageBySrc(srcUrl) {
@@ -360,18 +396,30 @@ class MangaTranslator {
     for (const img of this.processedImages) {
       if (img.src === srcUrl || img.dataset.mtOriginalSrc === srcUrl) return img;
     }
-    return null;
+    return Array.from(document.images).find(
+      img => img.src === srcUrl || img.dataset.mtOriginalSrc === srcUrl
+    ) || null;
   }
 
   applyInpaintBySrc(srcUrl, dataUrl) {
     const img = this.findImageBySrc(srcUrl);
     if (img) {
       img.src = dataUrl;
-      this.hideImageLoading(srcUrl);
     }
   }
 
   showProgressBar() {
+    if (this.isMinimalLoadingStyle()) {
+      this.hideDefaultProgressBar();
+      return;
+    }
+
+    this.hideAllMinimalLoaders();
+    if (this.progressBarHideTimer) {
+      clearTimeout(this.progressBarHideTimer);
+      this.progressBarHideTimer = null;
+    }
+
     if (!this.progressBar) {
       this.progressBar = document.createElement('div');
       this.progressBar.className = 'manga-translator-progress-bar';
@@ -382,6 +430,108 @@ class MangaTranslator {
       document.body.appendChild(this.progressBar);
     }
     this.progressBar.style.display = 'flex';
+  }
+
+  isMinimalLoadingStyle() {
+    return this.settings && this.settings.loadingStyle === 'minimal';
+  }
+
+  hasActiveBatchLoading() {
+    return this.isEnabled && (this.isScanning || this.isProcessing || this.processingQueue.length > 0);
+  }
+
+  hasActiveLoading() {
+    return this.hasActiveBatchLoading() || this.contextMenuLoadingSources.size > 0;
+  }
+
+  beginImageLoading(srcUrl, imgEl) {
+    const img = imgEl || this.findImageBySrc(srcUrl);
+    if (!img) return null;
+
+    const activeCount = this.imageLoadingCounts.get(img) || 0;
+    this.imageLoadingCounts.set(img, activeCount + 1);
+    this.showImageLoading(null, img);
+    return img;
+  }
+
+  finishImageLoading(srcUrl, imgEl) {
+    const img = imgEl || this.findImageBySrc(srcUrl);
+    if (!img) return null;
+
+    const activeCount = this.imageLoadingCounts.get(img) || 0;
+    if (activeCount <= 1) {
+      this.imageLoadingCounts.delete(img);
+      this.hideImageLoading(null, img);
+    } else {
+      this.imageLoadingCounts.set(img, activeCount - 1);
+    }
+    return img;
+  }
+
+  startContextMenuLoading(srcUrl) {
+    const activeLoading = this.contextMenuLoadingSources.get(srcUrl);
+    const img = activeLoading?.img || this.findImageBySrc(srcUrl);
+    if (activeLoading) {
+      activeLoading.count += 1;
+    } else {
+      this.contextMenuLoadingSources.set(srcUrl, { count: 1, img });
+    }
+    this.beginImageLoading(null, img);
+  }
+
+  finishContextMenuLoading(srcUrl) {
+    const activeLoading = this.contextMenuLoadingSources.get(srcUrl);
+    if (!activeLoading) return;
+
+    if (activeLoading.count > 1) {
+      activeLoading.count -= 1;
+    } else {
+      this.contextMenuLoadingSources.delete(srcUrl);
+    }
+    this.finishImageLoading(null, activeLoading.img);
+  }
+
+  hideAllMinimalLoaders() {
+    document.querySelectorAll('.manga-translator-minimal-loader').forEach((loading) => {
+      loading.style.display = 'none';
+    });
+  }
+
+  hideDefaultProgressBar() {
+    if (this.progressBarHideTimer) {
+      clearTimeout(this.progressBarHideTimer);
+      this.progressBarHideTimer = null;
+    }
+    if (this.progressBar) this.progressBar.style.display = 'none';
+  }
+
+  syncLoadingStyle() {
+    if (this.isMinimalLoadingStyle()) {
+      this.hideDefaultProgressBar();
+      document.querySelectorAll('.manga-translator-loading').forEach((loading) => {
+        loading.style.display = 'none';
+      });
+      this.hideAllMinimalLoaders();
+      if (this.currentProcessingImg) this.showImageLoading(null, this.currentProcessingImg);
+      this.contextMenuLoadingSources.forEach(({ img }, srcUrl) => this.showImageLoading(srcUrl, img));
+      return;
+    }
+
+    this.hideAllMinimalLoaders();
+    if (!this.hasActiveLoading()) return;
+
+    if (this.hasActiveBatchLoading()) {
+      this.showProgressBar();
+      if (this.isScanning && !this.isProcessing && this.processingQueue.length === 0) {
+        const text = this.progressBar.querySelector('.manga-translator-progress-text');
+        if (text) text.textContent = '⏳ Menunggu semua gambar di halaman termuat...';
+      } else {
+        this.updateProgressBar();
+      }
+    }
+
+    if (this.currentProcessingImg) this.showImageLoading(null, this.currentProcessingImg);
+    this.contextMenuLoadingSources.forEach(({ img }, srcUrl) => this.showImageLoading(srcUrl, img));
   }
 
   updateProgressBar() {
@@ -398,16 +548,24 @@ class MangaTranslator {
   }
 
   hideProgressBar() {
-    if (this.progressBar) {
-      const text = this.progressBar.querySelector('.manga-translator-progress-text');
-      const fill = this.progressBar.querySelector('.manga-translator-progress-fill');
-      text.textContent = `✅ Done! ${this.totalProcessed} pages translated`;
-      fill.style.width = '100%';
-
-      setTimeout(() => {
-        if (this.progressBar) this.progressBar.style.display = 'none';
-      }, 3000);
+    if (this.isMinimalLoadingStyle()) {
+      this.hideDefaultProgressBar();
+      return;
     }
+
+    this.hideAllMinimalLoaders();
+    if (!this.progressBar) return;
+
+    const text = this.progressBar.querySelector('.manga-translator-progress-text');
+    const fill = this.progressBar.querySelector('.manga-translator-progress-fill');
+    text.textContent = `✅ Done! ${this.totalProcessed} pages translated`;
+    fill.style.width = '100%';
+
+    if (this.progressBarHideTimer) clearTimeout(this.progressBarHideTimer);
+    this.progressBarHideTimer = setTimeout(() => {
+      if (this.progressBar) this.progressBar.style.display = 'none';
+      this.progressBarHideTimer = null;
+    }, 3000);
   }
 
   setupMutationObserver() {

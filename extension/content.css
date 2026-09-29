@@ -77,6 +77,26 @@
   font-weight: 600;
 }
 
+.manga-translator-minimal-loader {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.55));
+  z-index: 101;
+  pointer-events: none;
+}
+
+.manga-translator-minimal-loader img {
+  width: 30px;
+  height: 30px;
+  animation: manga-translator-spin 0.9s linear infinite;
+}
+
 @keyframes manga-translator-spin {
   to { transform: rotate(360deg); }
 }
