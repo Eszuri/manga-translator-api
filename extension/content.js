@@ -14,6 +14,7 @@ class MangaTranslator {
     this.contextMenuLoadingSources = new Map();
     this.imageLoadingCounts = new WeakMap();
     this.scanDebounceTimer = null;
+    this.viewportPriorityTimer = null;
 
     this.init();
   }
@@ -25,6 +26,7 @@ class MangaTranslator {
     }
     this.setupMessageListener();
     this.setupKeyboardShortcuts();
+    this.setupViewportPriority();
 
     const hostname = window.location.hostname;
     const enabledList = (this.settings && this.settings.enabledDomains) || [];
@@ -204,7 +206,8 @@ class MangaTranslator {
       return;
     }
 
-    for (const img of mangaImgs) {
+    const prioritizedImages = this.prioritizeImagesByViewport(mangaImgs);
+    for (const img of prioritizedImages) {
       const descriptor = this.getImageCacheDescriptor(img, settings);
       const originalSrc = descriptor.originalSrc;
       if (!img.dataset.mtOriginalSrc) {
@@ -418,10 +421,67 @@ class MangaTranslator {
     }, delayMs);
   }
 
+  isImageInViewport(img) {
+    const rect = img.getBoundingClientRect();
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+
+    return rect.width > 0 &&
+      rect.height > 0 &&
+      rect.bottom > 0 &&
+      rect.right > 0 &&
+      rect.top < viewportHeight &&
+      rect.left < viewportWidth;
+  }
+
+  prioritizeImagesByViewport(images) {
+    const visible = [];
+    const outsideViewport = [];
+
+    for (const img of images) {
+      if (this.isImageInViewport(img)) {
+        visible.push(img);
+      } else {
+        outsideViewport.push(img);
+      }
+    }
+
+    return [...visible, ...outsideViewport];
+  }
+
+  prioritizeProcessingQueue() {
+    if (this.processingQueue.length < 2) return;
+    this.processingQueue = this.prioritizeImagesByViewport(this.processingQueue);
+  }
+
+  hasVisibleActiveJob() {
+    return Array.from(this.activeJobs.values()).some(({ img }) => this.isImageInViewport(img));
+  }
+
+  setupViewportPriority() {
+    const refreshPriority = () => {
+      if (!this.isEnabled || this.processingQueue.length < 2 || this.viewportPriorityTimer) return;
+
+      this.viewportPriorityTimer = setTimeout(() => {
+        this.viewportPriorityTimer = null;
+        this.prioritizeProcessingQueue();
+        this.pumpQueue();
+      }, 100);
+    };
+
+    window.addEventListener('scroll', refreshPriority, { passive: true });
+    window.addEventListener('resize', refreshPriority, { passive: true });
+  }
+
   pumpQueue() {
     if (!this.isEnabled) return;
+    this.prioritizeProcessingQueue();
 
     while (this.activeJobs.size < this.maxConcurrentJobs && this.processingQueue.length > 0) {
+      this.prioritizeProcessingQueue();
+      const nextImage = this.processingQueue[0];
+      if (!this.isImageInViewport(nextImage) && this.hasVisibleActiveJob()) break;
+
       this.startTranslationJob(this.processingQueue.shift());
     }
 
