@@ -1,10 +1,9 @@
-import io
 import time
-from typing import Literal, Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
+from typing import Literal
+from fastapi import APIRouter, UploadFile, File, Form
 from pydantic import BaseModel, Field
-from PIL import Image
 
+from app.api.v1.image_uploads import read_validated_image
 from app.schemas import DetectBubblesResponse, DetectedBubble
 from app.services.detector import ContourBubbleDetector, sort_manga_reading_order
 from app.services.ocr_service import get_ocr_service
@@ -64,29 +63,7 @@ async def recognize_page_text(
     2. Sorts bubbles according to comic reading order (RTL/LTR).
     3. Crops each text region and extracts Japanese text using Manga-OCR (ViT).
     """
-    allowed_types = ["image/jpeg", "image/png", "image/webp", "application/octet-stream"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"File format '{file.content_type}' is not supported. Please use JPEG, PNG, or WebP."
-        )
-
-    try:
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Uploaded image file is empty."
-            )
-        image = Image.open(io.BytesIO(contents))
-        image.load()
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to process image file: {str(e)}"
-        )
+    image = await read_validated_image(file)
 
     start_time = time.perf_counter()
 
@@ -125,29 +102,7 @@ async def recognize_crop_text(
     """
     Extract text directly from a cropped image (extension manual box selection feature).
     """
-    allowed_types = ["image/jpeg", "image/png", "image/webp", "application/octet-stream"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"File format '{file.content_type}' is not supported. Please use JPEG, PNG, or WebP."
-        )
-
-    try:
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Uploaded cropped image file is empty."
-            )
-        crop_img = Image.open(io.BytesIO(contents))
-        crop_img.load()
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to process cropped image: {str(e)}"
-        )
+    crop_img = await read_validated_image(file)
 
     start_time = time.perf_counter()
     ocr_service = get_ocr_service(device=device)

@@ -1,10 +1,10 @@
 import base64
 import io
 import time
-from typing import Literal, Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Response, status
-from PIL import Image
+from typing import Literal
+from fastapi import APIRouter, UploadFile, File, Form, Response
 
+from app.api.v1.image_uploads import read_validated_image
 from app.core.config import settings
 from app.schemas import (
     DetectBubblesResponse,
@@ -74,29 +74,7 @@ async def translate_manga_page(
     3. Japanese Text Recognition via Manga-OCR (ViT Transformer).
     4. Contextual Dialogue Translation via OpenAI-compatible LLM (default: Indonesian).
     """
-    allowed_types = ["image/jpeg", "image/png", "image/webp", "application/octet-stream"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"File format '{file.content_type}' is not supported. Please use JPEG, PNG, or WebP."
-        )
-
-    try:
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Uploaded image file is empty."
-            )
-        image = Image.open(io.BytesIO(contents))
-        image.load()
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to process image file: {str(e)}"
-        )
+    image = await read_validated_image(file)
 
     start_time = time.perf_counter()
 
@@ -208,29 +186,7 @@ async def inpaint_and_translate_manga_page(
     6. Comic Font Typesetting with dynamic auto-fit font sizing and balanced word wrapping.
     7. Returns rendered image binary stream or JSON with Base64 image and bubble details.
     """
-    allowed_types = ["image/jpeg", "image/png", "image/webp", "application/octet-stream"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"File format '{file.content_type}' is not supported. Please use JPEG, PNG, or WebP."
-        )
-
-    try:
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Uploaded image file is empty."
-            )
-        image = Image.open(io.BytesIO(contents))
-        image.load()
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to process image file: {str(e)}"
-        )
+    image = await read_validated_image(file)
 
     start_time = time.perf_counter()
 
@@ -303,4 +259,3 @@ async def inpaint_and_translate_manga_page(
         bubbles=ordered_bubbles,
         processing_time_ms=duration_ms
     )
-

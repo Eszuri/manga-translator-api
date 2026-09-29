@@ -8,3 +8,4 @@
 .venv-cuda/
 *.json
 .env
+api/image test/layout_review/

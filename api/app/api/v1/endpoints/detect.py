@@ -1,9 +1,8 @@
-import io
 import time
 from typing import Literal
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
-from PIL import Image
+from fastapi import APIRouter, UploadFile, File, Form
 
+from app.api.v1.image_uploads import read_validated_image
 from app.schemas import DetectBubblesResponse
 from app.services.detector import ContourBubbleDetector, sort_manga_reading_order
 
@@ -46,29 +45,7 @@ async def detect_bubbles(
     Detect speech bubbles and text regions on a manga page.
     Returns a list of bounding boxes sorted according to comic reading order.
     """
-    allowed_types = ["image/jpeg", "image/png", "image/webp", "application/octet-stream"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"File format '{file.content_type}' is not supported. Please use JPEG, PNG, or WebP."
-        )
-
-    try:
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Uploaded image file is empty."
-            )
-        image = Image.open(io.BytesIO(contents))
-        image.load()
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to process image file: {str(e)}"
-        )
+    image = await read_validated_image(file)
 
     start_time = time.perf_counter()
 

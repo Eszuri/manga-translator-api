@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Tuple
 from pydantic import BaseModel, Field
 
 
@@ -35,6 +35,12 @@ class DetectedBubble(BaseModel):
     text_box: Optional[BoundingBox] = Field(
         default=None, 
         description="Inner text envelope coordinates inside the speech bubble"
+    )
+    layout_box: Optional[BoundingBox] = Field(
+        default=None, description="Safe typesetting rectangle inside the balloon silhouette"
+    )
+    bubble_polygon: Optional[List[Tuple[int, int]]] = Field(
+        default=None, description="Balloon interior contour in page coordinates"
     )
     text: Optional[str] = Field(
         default=None,
@@ -107,5 +113,4 @@ class InpaintPageResponse(BaseModel):
     image_base64: str = Field(..., description="Base64-encoded clean or typeset manga image")
     bubbles: List[DetectedBubble] = Field(default_factory=list)
     processing_time_ms: float
-
 

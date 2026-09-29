@@ -11,11 +11,11 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Enable CORS for browser extension (chrome-extension://, moz-extension://)
+# Apply the explicit CORS policy configured for local clients and extensions.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

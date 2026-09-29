@@ -7,6 +7,7 @@ import onnxruntime as ort
 
 from app.schemas import BoundingBox, DetectedBubble
 from app.services.detector import BaseBubbleDetector, sort_manga_reading_order
+from app.services.balloon_geometry import refine_text_boxes
 
 
 DEFAULT_MODEL_PATH = os.path.join(
@@ -181,15 +182,17 @@ class ComicTextDetector(BaseBubbleDetector):
         """
         Unletterboxes segmentation mask [1, 1, 1024, 1024] to original image resolution (orig_h, orig_w).
         """
-        top = int(round(dh))
-        bottom = int(round(1024 - dh))
-        left = int(round(dw))
-        right = int(round(1024 - dw))
+        # Use the same asymmetric rounding as letterbox for odd padding.
+        mask_h, mask_w = seg.shape[-2:]
+        top = int(round(dh - 0.1))
+        bottom = mask_h - int(round(dh + 0.1))
+        left = int(round(dw - 0.1))
+        right = mask_w - int(round(dw + 0.1))
         cropped = seg[0, 0, top:bottom, left:right]
         resized = cv2.resize(cropped, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
         return resized
 
-    def detect(self, image: Image.Image) -> List[DetectedBubble]:
+    def detect(self, image: Image.Image, refine: bool = True) -> List[DetectedBubble]:
         """
         Detects manga text blocks using the Comic Text Detector neural network with Letterbox.
         Returns a list of DetectedBubble objects with text_box populated.
@@ -199,6 +202,7 @@ class ComicTextDetector(BaseBubbleDetector):
             return []
 
         blk, seg, _, r, (dw, dh) = self.detect_raw(image)
+        self._latest_segmentation = (image, self.get_unletterboxed_seg(seg, orig_w, orig_h, dw, dh))
         preds = blk[0]  # Shape: [64512, 7]
 
         cx = preds[:, 0]
@@ -255,16 +259,15 @@ class ComicTextDetector(BaseBubbleDetector):
             # Undo letterbox padding and scaling
             unpad_x = x1_v[idx] - dw
             unpad_y = y1_v[idx] - dh
-            bx = int(round(unpad_x / r))
-            by = int(round(unpad_y / r))
-            bw = int(round(w_v[idx] / r))
-            bh = int(round(h_v[idx] / r))
-
-            # Clamp coordinates to original image boundaries
-            bx = max(0, min(bx, orig_w - 1))
-            by = max(0, min(by, orig_h - 1))
-            bw = max(1, min(bw, orig_w - bx))
-            bh = max(1, min(bh, orig_h - by))
+            # Clip endpoints independently; moving a negative origin alone used
+            # to shift/expand edge-cropped text boxes into the neighbouring art.
+            bx = max(0, int(round(unpad_x / r)))
+            by = max(0, int(round(unpad_y / r)))
+            right = min(orig_w, int(round((unpad_x + w_v[idx]) / r)))
+            bottom = min(orig_h, int(round((unpad_y + h_v[idx]) / r)))
+            bw, bh = right - bx, bottom - by
+            if bw <= 0 or bh <= 0:
+                continue
 
             # Direction: vertical vs horizontal
             direction = "vertical" if prob_v_v[idx] >= prob_h_v[idx] else "horizontal"
@@ -284,6 +287,21 @@ class ComicTextDetector(BaseBubbleDetector):
             )
             detected_list.append(bubble)
 
-        # 3. Sort into Manga Reading Order (RTL by default)
-        ordered = sort_manga_reading_order(detected_list, reading_direction="rtl")
+        # Recover text groups from character support before hybrid matching/OCR.
+        if not refine:
+            return sort_manga_reading_order(detected_list, reading_direction='rtl')
+        segmentation = self._latest_segmentation[1]
+        gray = np.array(image.convert('L'))
+        refined = []
+        for bubble in detected_list:
+            for box in refine_text_boxes(bubble.text_box, gray, segmentation, bubble.direction):
+                refined.append(bubble.model_copy(update={
+                    'bounding_box': box, 'text_box': box,
+                    'aspect_ratio': round(box.height / box.width, 2),
+                }))
+        ordered = sort_manga_reading_order(refined, reading_direction="rtl")
         return ordered
+
+    def get_cached_segmentation(self, image: Image.Image) -> Optional[np.ndarray]:
+        cached = getattr(self, '_latest_segmentation', None)
+        return cached[1] if cached is not None and cached[0] is image else None

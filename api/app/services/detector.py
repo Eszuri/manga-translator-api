@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Set, Optional, Dict
+from typing import List, Tuple, Set, Dict
 from PIL import Image, ImageDraw
 import numpy as np
 import cv2
@@ -25,106 +25,6 @@ def calculate_iou(box_a: BoundingBox, box_b: BoundingBox) -> float:
     return intersection_area / union_area if union_area > 0 else 0.0
 
 
-def containment_ratio(inner: BoundingBox, outer: BoundingBox) -> float:
-    """Calculate how much of the inner box is contained within the outer box."""
-    x_left = max(inner.x, outer.x)
-    y_top = max(inner.y, outer.y)
-    x_right = min(inner.right, outer.right)
-    y_bottom = min(inner.bottom, outer.bottom)
-
-    if x_right < x_left or y_bottom < y_top:
-        return 0.0
-
-    intersection_area = (x_right - x_left) * (y_bottom - y_top)
-    inner_area = inner.area
-    return float(intersection_area) / float(inner_area) if inner_area > 0 else 0.0
-
-
-def non_max_suppression(
-    boxes: List[BoundingBox],
-    iou_threshold: float = 0.35,
-    containment_threshold: float = 0.70
-) -> List[BoundingBox]:
-    """Prune redundant/contained overlapping boxes."""
-    if not boxes:
-        return []
-
-    sorted_boxes = sorted(boxes, key=lambda b: b.area, reverse=True)
-    selected: List[BoundingBox] = []
-
-    for box in sorted_boxes:
-        should_keep = True
-        for kept in selected:
-            if calculate_iou(box, kept) > iou_threshold or containment_ratio(box, kept) > containment_threshold:
-                should_keep = False
-                break
-        if should_keep:
-            selected.append(box)
-
-    return selected
-
-
-def merge_adjacent_bubble_boxes(
-    boxes: List[Tuple[BoundingBox, str]],
-    scale: float = 1.0
-) -> List[Tuple[BoundingBox, str]]:
-    """
-    Merge adjacent text columns/lines that belong to the same multi-column dialogue bubble.
-    e.g., column 'じゃあ' next to column '次行くか！' inside the same speech balloon.
-    """
-    if len(boxes) <= 1:
-        return boxes
-
-    merged: List[Tuple[BoundingBox, str]] = []
-    used = set()
-
-    for i, (b1, d1) in enumerate(boxes):
-        if i in used:
-            continue
-        group = [b1]
-        used.add(i)
-
-        changed = True
-        while changed:
-            changed = False
-            for j, (b2, d2) in enumerate(boxes):
-                if j in used or d1 != d2:
-                    continue
-
-                for gb in group:
-                    dx = max(0, max(gb.x - b2.right, b2.x - gb.right))
-                    dy = max(0, max(gb.y - b2.bottom, b2.y - gb.bottom))
-                    overlap_y = min(gb.bottom, b2.bottom) - max(gb.y, b2.y)
-                    overlap_x = min(gb.right, b2.right) - max(gb.x, b2.x)
-
-                    if d1 == "vertical":
-                        # Two vertical dialogue columns side-by-side
-                        if dx <= int(52 * scale) and overlap_y >= int(20 * scale):
-                            group.append(b2)
-                            used.add(j)
-                            changed = True
-                            break
-                    else:
-                        # Two horizontal lines stacked vertically
-                        if dy <= int(40 * scale) and overlap_x >= int(20 * scale):
-                            group.append(b2)
-                            used.add(j)
-                            changed = True
-                            break
-
-        min_x = min(b.x for b in group)
-        min_y = min(b.y for b in group)
-        max_x = max(b.right for b in group)
-        max_y = max(b.bottom for b in group)
-
-        merged.append((
-            BoundingBox(x=min_x, y=min_y, width=max_x - min_x, height=max_y - min_y),
-            d1
-        ))
-
-    return merged
-
-
 def sort_manga_reading_order(
     bubbles: List[DetectedBubble],
     reading_direction: str = "rtl",
@@ -138,17 +38,22 @@ def sort_manga_reading_order(
     if not bubbles:
         return []
 
-    if reading_direction == "ltr":
-        sorted_list = sorted(bubbles, key=lambda b: (b.bounding_box.y // 60, b.bounding_box.x))
-    else:
-        avg_height = sum(b.bounding_box.height for b in bubbles) / len(bubbles)
-        band_size = max(50.0, avg_height * (1.0 + row_tolerance_ratio))
-
-        def sort_key(item: DetectedBubble) -> Tuple[int, float]:
-            band_idx = int(item.bounding_box.center_y // band_size)
-            return (band_idx, -item.bounding_box.center_x)
-
-        sorted_list = sorted(bubbles, key=sort_key)
+    # Cluster overlapping vertical extents instead of arbitrary fixed-height
+    # bins, which could put a lower panel before a tall dialogue above it.
+    rows = []
+    for bubble in sorted(bubbles, key=lambda b: b.bounding_box.y):
+        box = bubble.bounding_box
+        if rows:
+            row = rows[-1]
+            overlap = min(row['bottom'], box.bottom) - max(row['top'], box.y)
+            if overlap >= max(1, min(box.height, row['bottom'] - row['top']) * row_tolerance_ratio):
+                row['bubbles'].append(bubble)
+                row['bottom'] = max(row['bottom'], box.bottom)
+                continue
+        rows.append(dict(top=box.y, bottom=box.bottom, bubbles=[bubble]))
+    sign = 1 if reading_direction == 'ltr' else -1
+    sorted_list = [b for row in rows for b in sorted(
+        row['bubbles'], key=lambda b: (sign * b.bounding_box.center_x, b.bounding_box.y))]
 
     for idx, bubble in enumerate(sorted_list, start=1):
         bubble.id = idx
@@ -940,7 +845,8 @@ def annotate_and_save_bubbles(
     image: Image.Image,
     bubbles: List[DetectedBubble],
     output_path: str,
-    draw_text_boxes: bool = True
+    draw_text_boxes: bool = True,
+    draw_layout: bool = False
 ) -> str:
     """
     Renders bounding box annotations onto a copy of the manga image
@@ -960,7 +866,13 @@ def annotate_and_save_bubbles(
             if t.x != box.x or t.y != box.y or t.width != box.width or t.height != box.height:
                 draw.rectangle([t.x, t.y, t.right, t.bottom], outline=(0, 200, 0), width=2)
 
+        if draw_layout:
+            if b.bubble_polygon:
+                points = [tuple(p) for p in b.bubble_polygon]
+                draw.line(points + points[:1], fill=(255, 140, 0), width=2)
+            if b.layout_box:
+                t = b.layout_box
+                draw.rectangle([t.x, t.y, t.right, t.bottom], outline=(0, 100, 255), width=2)
+
     out.save(output_path)
     return output_path
-
-

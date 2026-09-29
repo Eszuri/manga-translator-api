@@ -3,7 +3,7 @@ os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 import re
 import logging
 from typing import List, Optional
-from PIL import Image
+from PIL import Image, ImageDraw
 import numpy as np
 import onnxruntime as ort
 import jaconv
@@ -171,6 +171,12 @@ class MangaOcrService:
             return ""
 
         crop = full_image.crop((x1, y1, x2, y2))
+        if bubble.bubble_polygon:
+            # Exclude neighbouring art/balloons from padded OCR crops.
+            shape = Image.new('L', crop.size, 0)
+            ImageDraw.Draw(shape).polygon(
+                [(x - x1, y - y1) for x, y in bubble.bubble_polygon], fill=255)
+            crop = Image.composite(crop.convert('RGB'), Image.new('RGB', crop.size, 'white'), shape)
         return self.recognize_crop(crop)
 
     def recognize_all_bubbles(

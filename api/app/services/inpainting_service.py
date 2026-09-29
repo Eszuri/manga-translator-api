@@ -31,7 +31,8 @@ class MangaInpaintingService:
         self,
         image_shape: tuple,
         seg_mask: Optional[np.ndarray] = None,
-        bubbles: Optional[List[DetectedBubble]] = None
+        bubbles: Optional[List[DetectedBubble]] = None,
+        source_image: Optional[np.ndarray] = None
     ) -> np.ndarray:
         """
         Builds a binary inpainting mask (255 where text is present, 0 elsewhere).
@@ -39,28 +40,83 @@ class MangaInpaintingService:
         orig_h, orig_w = image_shape[:2]
         final_mask = np.zeros((orig_h, orig_w), dtype=np.uint8)
 
-        # 1. Use neural character segmentation mask if available
+        allowed = np.zeros_like(final_mask) if bubbles is not None else np.full_like(final_mask, 255)
+        char_mask = np.zeros_like(final_mask)
+        gray = (cv2.cvtColor(source_image, cv2.COLOR_RGB2GRAY)
+                if source_image is not None and source_image.ndim == 3 else source_image)
+
+        # Neural segmentation is evidence, not permission to erase the entire page.
         if seg_mask is not None:
             char_mask = (seg_mask > self.mask_threshold).astype(np.uint8) * 255
             # Resize if dimensions differ
             if char_mask.shape != (orig_h, orig_w):
                 char_mask = cv2.resize(char_mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
-            final_mask = cv2.bitwise_or(final_mask, char_mask)
-
-        # 2. Reinforce mask using detected text_box envelopes
-        if bubbles:
+        if bubbles is None:
+            final_mask = char_mask.copy()
+        else:
             for b in bubbles:
                 box = b.text_box or b.bounding_box
-                # Safety margin inside text box
-                tx1 = max(0, box.x)
-                ty1 = max(0, box.y)
-                tx2 = min(orig_w, box.right)
-                ty2 = min(orig_h, box.bottom)
+                pad = max(6, round(max(orig_h, orig_w) * 0.006))
+                tx1, ty1 = max(0, box.x - pad), max(0, box.y - pad)
+                tx2, ty2 = min(orig_w, box.right + pad), min(orig_h, box.bottom + pad)
                 if tx2 > tx1 and ty2 > ty1:
-                    # If neural mask had no detections in this box, fill the box area
-                    box_patch = final_mask[ty1:ty2, tx1:tx2]
-                    if np.count_nonzero(box_patch) == 0:
-                        final_mask[ty1:ty2, tx1:tx2] = 255
+                    local_allowed = np.full((ty2 - ty1, tx2 - tx1), 255, np.uint8)
+                    if b.bubble_polygon:
+                        local_allowed[:] = 0
+                        contour = np.array([(x - tx1, y - ty1) for x, y in b.bubble_polygon], np.int32)
+                        cv2.fillPoly(local_allowed, [contour], 255)
+                        local_allowed = cv2.erode(local_allowed, np.ones((3, 3), np.uint8))
+                    allowed[ty1:ty2, tx1:tx2] |= local_allowed
+                    patch = char_mask[ty1:ty2, tx1:tx2].copy()
+                    if gray is not None:
+                        # Recover complete glyph strokes (including furigana), but
+                        # reject outlines/art connected to the crop boundary.
+                        ink = (gray[ty1:ty2, tx1:tx2] < 190).astype(np.uint8)
+                        count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
+                        evidence = cv2.dilate(patch, np.ones((3, 3), np.uint8))
+                        has_evidence = bool(np.any(evidence))
+                        patch[:] = 0
+                        max_dim = max(20, min(box.width, box.height) * 1.8)
+                        for label in range(1, count):
+                            x, y, w, h, area = stats[label]
+                            if (area < 2 or w > max_dim or h > max_dim
+                                    or x == 0 or y == 0 or x + w == ink.shape[1] or y + h == ink.shape[0]):
+                                continue
+                            component = labels == label
+                            if has_evidence and not np.any(evidence[component]):
+                                continue
+                            patch[component] = 255
+                    # Never use a solid rectangular fallback: that erases artwork.
+                    final_mask[ty1:ty2, tx1:tx2] |= patch & local_allowed
+
+                # The neural text envelope can omit whole Japanese columns. In a
+                # genuinely white balloon, the inner polygon itself is a safer
+                # erasure boundary than an incomplete envelope. Do not apply this
+                # to scenery, shaded captions, or graphic lettering.
+                if b.bubble_polygon and gray is not None:
+                    polygon = np.asarray(b.bubble_polygon, np.int32)
+                    px, py, pw, ph = cv2.boundingRect(polygon)
+                    px1, py1 = max(0, px), max(0, py)
+                    px2, py2 = min(orig_w, px + pw), min(orig_h, py + ph)
+                    if px2 <= px1 or py2 <= py1:
+                        continue
+                    inner = np.zeros((py2 - py1, px2 - px1), np.uint8)
+                    cv2.fillPoly(inner, [polygon - (px1, py1)], 255)
+                    inset = max(5, round(min(pw, ph) * 0.045))
+                    inner = cv2.erode(inner, cv2.getStructuringElement(
+                        cv2.MORPH_ELLIPSE, (2 * inset + 1, 2 * inset + 1)),
+                        borderType=cv2.BORDER_CONSTANT, borderValue=0)
+                    if np.count_nonzero(inner) < 400:
+                        continue
+                    crop_gray = gray[py1:py2, px1:px2]
+                    white_fraction = np.mean(crop_gray[inner != 0] > 215)
+                    if white_fraction < 0.72:
+                        continue
+                    # All dark glyph cores in this white interior are text; the
+                    # polygon inset protects the drawn balloon outline.
+                    extra = ((crop_gray < 185) & (inner != 0)).astype(np.uint8) * 255
+                    final_mask[py1:py2, px1:px2] |= extra
+                    allowed[py1:py2, px1:px2] |= inner
 
         # 3. Morphological dilation to fully encompass text stroke antialiasing
         if self.dilation_kernel_size > 0 and self.dilation_iterations > 0:
@@ -70,13 +126,13 @@ class MangaInpaintingService:
             )
             final_mask = cv2.dilate(final_mask, kernel, iterations=self.dilation_iterations)
 
-        return final_mask
+        return final_mask & allowed
 
     def inpaint(
         self,
         image: Image.Image,
         seg_mask: Optional[np.ndarray] = None,
-        bubbles: Optional[List[DetectedBubble]] = None
+        bubbles: Optional[List[DetectedBubble]] = None,
     ) -> Image.Image:
         """
         Inpaints the input PIL Image to erase Japanese dialogue text.
@@ -86,7 +142,8 @@ class MangaInpaintingService:
             return image
 
         img_rgb = np.array(image.convert("RGB"))
-        mask = self.create_text_mask(img_rgb.shape, seg_mask=seg_mask, bubbles=bubbles)
+        mask = self.create_text_mask(img_rgb.shape, seg_mask=seg_mask, bubbles=bubbles,
+                                     source_image=img_rgb)
 
         if np.count_nonzero(mask) == 0:
             return image
@@ -99,4 +156,22 @@ class MangaInpaintingService:
             flags=self.inpaint_method
         )
         inpainted_rgb = cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB)
+        # In an almost-white balloon the paper is the background. A solid
+        # interior is more faithful than Telea's grey/black echoes around the
+        # many tightly packed Japanese strokes. Preserve an inset outline.
+        if bubbles:
+            gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
+            for bubble in bubbles:
+                if not bubble.bubble_polygon:
+                    continue
+                polygon = np.asarray(bubble.bubble_polygon, np.int32)
+                interior = np.zeros(gray.shape, np.uint8)
+                cv2.fillPoly(interior, [polygon], 255)
+                if np.count_nonzero(interior) < 400:
+                    continue
+                if np.mean(gray[interior != 0] > 215) < 0.87:
+                    continue
+                interior = cv2.erode(interior, np.ones((3, 3), np.uint8),
+                                     borderType=cv2.BORDER_CONSTANT, borderValue=0)
+                inpainted_rgb[interior != 0] = 255
         return Image.fromarray(inpainted_rgb)
