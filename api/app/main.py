@@ -14,8 +14,8 @@ async def lifespan(app: FastAPI):
     from app.services.ocr_service import get_ocr_service
 
     app.state.gpu_provider = required_gpu_provider()
-    app.state.detector = ComicTextDetector(device="gpu", require_gpu=True)
-    app.state.ocr = get_ocr_service(device="gpu", require_gpu=True)
+    app.state.detector = ComicTextDetector(device="gpu")
+    app.state.ocr = get_ocr_service(device="gpu")
     yield
 
 app = FastAPI(

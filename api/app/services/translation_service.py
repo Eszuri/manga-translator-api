@@ -1,14 +1,12 @@
 import asyncio
-import os
 import re
 import json
 import logging
-import time
 from typing import Dict, List, Optional, Tuple, Any
 import httpx
 
 from app.core.config import settings
-from app.schemas import DetectedBubble, DialogueItem, TranslatedDialogueItem
+from app.schemas import DetectedBubble
 
 logger = logging.getLogger(__name__)
 
@@ -118,35 +116,6 @@ class MangaTranslationService:
             else:
                 result[b_id] = f"[{reason}]"
         return result
-
-    def translate_bubbles(
-        self,
-        bubbles: List[DetectedBubble],
-        target_lang: str = "id"
-    ) -> List[DetectedBubble]:
-        """
-        Synchronous batch translation of DetectedBubble objects in context.
-        Populates bubble.translation for each bubble.
-        """
-        if not bubbles:
-            return bubbles
-
-        dialogue_items = [
-            {"id": b.id, "text": b.text or ""}
-            for b in bubbles
-            if (b.text and b.text.strip())
-        ]
-
-        if not dialogue_items:
-            return bubbles
-
-        translations_map = self._call_llm_sync(dialogue_items, target_lang=target_lang)
-
-        for b in bubbles:
-            if b.id in translations_map:
-                b.translation = translations_map[b.id]
-
-        return bubbles
 
     async def _call_google_async(
         self,
@@ -298,62 +267,6 @@ class MangaTranslationService:
                 b.translation = translations_map[b.id]
 
         return bubbles
-
-    def _call_llm_sync(
-        self,
-        dialogue_items: List[Dict[str, Any]],
-        target_lang: str = "id"
-    ) -> Dict[int, str]:
-        """Synchronous HTTP call to the OpenAI-compatible endpoint."""
-        if not self.is_configured():
-            logger.warning("LLM API Key is not configured. Returning placeholder message.")
-            return self._generate_fallback_translations(
-                dialogue_items,
-                "No API Key: Set LLM_API_KEY in .env"
-            )
-
-        url = f"{self.base_url}/chat/completions"
-        headers = {
-            "Content-Type": "application/json"
-        }
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": self._build_system_prompt(target_lang)},
-                {"role": "user", "content": self._build_user_prompt(dialogue_items, target_lang)}
-            ],
-            "temperature": 0.3
-        }
-
-        try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
-                response = client.post(url, headers=headers, json=payload)
-
-            if response.status_code == 401:
-                logger.error("LLM API returned 401 Unauthorized: Invalid API key.")
-                return self._generate_fallback_translations(dialogue_items, "Error: Invalid API Key")
-            elif response.status_code == 429:
-                logger.warning("LLM API returned 429 Rate Limit / Quota Exceeded.")
-                return self._generate_fallback_translations(dialogue_items, "Error: Rate Limit Exceeded")
-            elif response.status_code != 200:
-                logger.error(f"LLM API returned unexpected status {response.status_code}: {response.text[:200]}")
-                return self._generate_fallback_translations(dialogue_items, f"Error: HTTP {response.status_code}")
-
-            data = response.json()
-            raw_content = data["choices"][0]["message"]["content"]
-            return self._parse_llm_response(raw_content, dialogue_items)
-
-        except httpx.ConnectError as e:
-            logger.error(f"Failed to connect to LLM endpoint at {self.base_url}: {e}")
-            return self._generate_fallback_translations(dialogue_items, "Error: Connection Failed")
-        except httpx.TimeoutException as e:
-            logger.error(f"LLM request timed out ({self.timeout_seconds}s): {e}")
-            return self._generate_fallback_translations(dialogue_items, "Error: Request Timeout")
-        except Exception as e:
-            logger.error(f"Unexpected error during translation: {e}")
-            return self._generate_fallback_translations(dialogue_items, f"Error: {type(e).__name__}")
 
     async def _call_llm_async(
         self,

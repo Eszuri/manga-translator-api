@@ -49,7 +49,6 @@ class ComicTextDetector(BaseBubbleDetector):
     """
     _shared_session: Optional[ort.InferenceSession] = None
     _shared_model_path: Optional[str] = None
-    _shared_device: Optional[str] = None
 
     def __init__(
         self,
@@ -57,7 +56,6 @@ class ComicTextDetector(BaseBubbleDetector):
         conf_threshold: float = 0.35,
         nms_threshold: float = 0.35,
         num_threads: int = 4,
-        require_gpu: bool = True,
         device: str = "gpu"
     ):
         self.model_path = model_path or DEFAULT_MODEL_PATH
@@ -66,7 +64,6 @@ class ComicTextDetector(BaseBubbleDetector):
         self.num_threads = num_threads
         
         require_gpu_device(device)
-        self.target_device = "gpu"
 
         self._init_session()
 
@@ -77,7 +74,6 @@ class ComicTextDetector(BaseBubbleDetector):
         if (
             ComicTextDetector._shared_session is not None
             and ComicTextDetector._shared_model_path == self.model_path
-            and ComicTextDetector._shared_device == self.target_device
         ):
             self.session = ComicTextDetector._shared_session
             self.device_name = self._compute_device_name()
@@ -111,7 +107,6 @@ class ComicTextDetector(BaseBubbleDetector):
         self.device_name = self._compute_device_name()
         ComicTextDetector._shared_session = self.session
         ComicTextDetector._shared_model_path = self.model_path
-        ComicTextDetector._shared_device = self.target_device
 
     def _compute_device_name(self) -> str:
         active = self.session.get_providers()

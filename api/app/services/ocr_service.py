@@ -24,20 +24,17 @@ class MangaOcrService:
     Requires NVIDIA CUDA or DirectML GPU execution; CPU inference is disabled.
     """
     _shared_instance: Optional["MangaOcrService"] = None
-    _shared_device: Optional[str] = None
 
     def __init__(
         self,
         model_dir: Optional[str] = None,
         device: str = "gpu",
-        require_gpu: bool = True,
         num_threads: int = 4
     ):
         self.model_dir = model_dir or DEFAULT_OCR_DIR
         self.num_threads = num_threads
 
         require_gpu_device(device)
-        self.target_device = "gpu"
 
         self._init_models()
 
@@ -155,17 +152,12 @@ class MangaOcrService:
         return bubbles
 
 
-def get_ocr_service(device: str = "gpu", require_gpu: bool = True) -> MangaOcrService:
+def get_ocr_service(device: str = "gpu") -> MangaOcrService:
     """Returns singleton instance of MangaOcrService."""
     require_gpu_device(device)
-    target_dev = "gpu"
-    if (
-        MangaOcrService._shared_instance is not None
-        and MangaOcrService._shared_device == target_dev
-    ):
+    if MangaOcrService._shared_instance is not None:
         return MangaOcrService._shared_instance
 
-    instance = MangaOcrService(device=device, require_gpu=require_gpu)
+    instance = MangaOcrService(device=device)
     MangaOcrService._shared_instance = instance
-    MangaOcrService._shared_device = target_dev
     return instance

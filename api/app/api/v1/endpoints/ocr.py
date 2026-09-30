@@ -4,7 +4,7 @@ from fastapi import APIRouter, UploadFile, File, Form
 from pydantic import BaseModel, Field
 
 from app.api.v1.image_uploads import read_validated_image
-from app.schemas import DetectBubblesResponse, DetectedBubble
+from app.schemas import DetectBubblesResponse
 from app.core.gpu import require_gpu_device
 from app.services.detector import sort_manga_reading_order
 from app.services.ocr_service import get_ocr_service
@@ -21,13 +21,13 @@ def get_detector_instance(detector_type: str, device: str):
     if detector_type == "comic_text_detector":
         if _comic_detector is None:
             from app.services.comic_text_detector import ComicTextDetector
-            _comic_detector = ComicTextDetector(device="gpu", require_gpu=True)
+            _comic_detector = ComicTextDetector(device="gpu")
         return _comic_detector
     elif detector_type == "hybrid":
         if _hybrid_detector is None:
             from app.services.hybrid_detector import HybridBubbleDetector
             from app.services.comic_text_detector import ComicTextDetector
-            comic_det = ComicTextDetector(device="gpu", require_gpu=True)
+            comic_det = ComicTextDetector(device="gpu")
             _hybrid_detector = HybridBubbleDetector(comic_detector=comic_det)
         return _hybrid_detector
     raise ValueError("GPU-only backend does not support the CPU contour detector.")

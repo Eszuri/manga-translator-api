@@ -16,7 +16,7 @@ def get_comic_text_detector():
     global _comic_text_detector
     if _comic_text_detector is None:
         from app.services.comic_text_detector import ComicTextDetector
-        _comic_text_detector = ComicTextDetector(device="gpu", require_gpu=True)
+        _comic_text_detector = ComicTextDetector(device="gpu")
     return _comic_text_detector
 
 
@@ -24,7 +24,7 @@ def get_hybrid_detector():
     global _hybrid_detector
     if _hybrid_detector is None:
         from app.services.hybrid_detector import HybridBubbleDetector
-        _hybrid_detector = HybridBubbleDetector(device="gpu", require_gpu=True)
+        _hybrid_detector = HybridBubbleDetector(device="gpu")
     return _hybrid_detector
 
 

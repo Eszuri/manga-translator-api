@@ -129,7 +129,7 @@ def select_images(directory: Path, name: str | None, limit: int) -> list[Path]:
 
 
 def make_detector(kind: str, device: str):
-    comic_detector = ComicTextDetector(device="gpu", require_gpu=True)
+    comic_detector = ComicTextDetector(device="gpu")
     if kind == "comic_text_detector":
         return comic_detector
     return HybridBubbleDetector(comic_detector=comic_detector)
@@ -285,7 +285,7 @@ def main() -> int:
     print(f"Pages: {len(images)} | device: {args.device} | translation: Google (test only)")
     print(f"Output: {run_dir}")
     detector = make_detector(args.detector, args.device)
-    ocr = MangaOcrService(device="gpu", require_gpu=True)
+    ocr = MangaOcrService(device="gpu")
     translator = GoogleTestTranslationService()
     inpainter = MangaInpaintingService()
     typesetter = MangaTypesettingService()
