@@ -1,7 +1,0 @@
--r requirements.txt
-# Optional CUDA 12 environment; do not combine with requirements-gpu.txt.
-onnxruntime-gpu[cuda,cudnn]==1.26.0
-# Manga OCR (ViT + RoBERTa Transformer)
-manga-ocr-torchless>=0.2.0
-sentencepiece>=0.2.0
-jaconv>=0.3.4

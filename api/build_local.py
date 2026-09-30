@@ -1,17 +1,15 @@
-"""One end-to-end visual test of the manga pipeline (Google translation only).
+"""Build local visual output from manga pages in ``test-data``.
 
-The production API continues to use app.services.translation_service.
+This manual local builder uses the same Google translation implementation as
+the API and writes inspectable output for every pipeline stage.
 """
 
 import argparse
 import asyncio
-import importlib.util
 import json
 import os
-import re
 import sys
 import time
-import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -28,6 +26,7 @@ from app.services.hybrid_detector import HybridBubbleDetector
 from app.services.inpainting_service import MangaInpaintingService
 from app.services.ocr_service import MangaOcrService
 from app.services.translation_filters import is_graphic_text, usable_translation
+from app.services.translation_service import get_translation_service
 from app.services.typesetting_service import MangaTypesettingService
 
 
@@ -43,57 +42,10 @@ STAGES = (
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
-class GoogleTestTranslationService:
-    """Google Translate is confined to this visual test; production uses its API."""
-
-    async def _request(self, texts: list[str], target_lang: str) -> list[str]:
-        import httpx
-        from googletrans import Translator
-
-        for attempt in range(3):
-            try:
-                async with Translator(raise_exception=True, timeout=httpx.Timeout(20.0),
-                                      list_operation_max_concurrency=2) as translator:
-                    result = await translator.translate(texts, src="ja", dest=target_lang)
-                if not isinstance(result, list):
-                    result = [result]
-                values = [str(item.text).strip() for item in result]
-                if len(values) != len(texts) or not all(values):
-                    raise ValueError("Google Translate returned incomplete results")
-                return values
-            except Exception as exc:
-                if attempt == 2:
-                    raise RuntimeError(f"Google Translate failed: {exc}") from exc
-                await asyncio.sleep(min(4, 2 ** attempt))
-        raise AssertionError("unreachable")
-
-    def translate_bubbles(self, bubbles, target_lang: str):
-        pending = []
-        for bubble in bubbles:
-            original = (bubble.text or "").strip()
-            compact = re.sub(r"\s+", "", original)
-            if re.fullmatch(r"[.．…・·｡。⋯･]+", compact):
-                bubble.translation = "..."
-            elif re.fullmatch(r"[!！]+", compact):
-                bubble.translation = "!"
-            elif re.fullmatch(r"[?？]+", compact):
-                bubble.translation = "?"
-            elif original:
-                pending.append(bubble)
-        if pending:
-            translated = asyncio.run(self._request(
-                [bubble.text.strip() for bubble in pending], target_lang))
-            for bubble, value in zip(pending, translated):
-                value = unicodedata.normalize("NFKC", value).strip()
-                value = re.sub(r"(?:\s*\.){2,}", "...", value)
-                bubble.translation = re.sub(r"\s+([!?.,])", r"\1", value)
-        return bubbles
-
-
 def parse_args():
-    parser = argparse.ArgumentParser(description="Single end-to-end manga visual test")
+    parser = argparse.ArgumentParser(description="Build local manga output from test-data images")
     parser.add_argument("--dir", type=Path, default=Path("test-data/manga-pages"))
-    parser.add_argument("--output-root", type=Path, default=Path("test-data/output"))
+    parser.add_argument("--output-root", type=Path, default=Path("test-data/builds"))
     parser.add_argument("--image", help="One input filename, e.g. 009.jpg")
     parser.add_argument("--limit", type=int, default=0, help="Pages to process; 0 means all")
     parser.add_argument("--device", choices=("gpu",), default="gpu")
@@ -250,7 +202,9 @@ def process_page(path: Path, run_dir: Path, detector, ocr, translator,
     start = time.perf_counter()
     candidates = [b for b in bubbles if (b.text or "").strip() and not is_graphic_text(b.text)]
     if candidates:
-        translator.translate_bubbles(candidates, target_lang=args.target_lang)
+        asyncio.run(translator.translate_bubbles_async(
+            candidates, target_lang=args.target_lang, translator="google"
+        ))
     timings["translate_ms"] = round((time.perf_counter() - start) * 1000)
     transcript_image(image, bubbles, f"Google Translate - {args.target_lang}", True).save(outputs["04_translate"])
     write_json(steps_dir / f"{stem}_04_translate.json", [b.model_dump() for b in bubbles])
@@ -272,21 +226,17 @@ def process_page(path: Path, run_dir: Path, detector, ocr, translator,
 
 def main() -> int:
     args = parse_args()
-    if importlib.util.find_spec("googletrans") is None:
-        print("Google Translate test dependency missing: pip install -r api/requirements-dev.txt",
-              file=sys.stderr)
-        return 2
     images = select_images(resolve_from_api(args.dir), args.image, args.limit)
     root = resolve_from_api(args.output_root)
     run_dir = root / datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
     for folder in ("steps", "all_in_one"):
         (run_dir / folder).mkdir(parents=True, exist_ok=False)
 
-    print(f"Pages: {len(images)} | device: {args.device} | translation: Google (test only)")
+    print(f"Pages: {len(images)} | device: {args.device} | translation: Google")
     print(f"Output: {run_dir}")
     detector = make_detector(args.detector, args.device)
     ocr = MangaOcrService(device="gpu")
-    translator = GoogleTestTranslationService()
+    translator = get_translation_service()
     inpainter = MangaInpaintingService()
     typesetter = MangaTypesettingService()
 

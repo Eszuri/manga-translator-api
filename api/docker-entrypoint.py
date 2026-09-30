@@ -1,4 +1,4 @@
-"""Validate mounted assets before starting the container API."""
+"""Start the GPU-only API inside its Docker container."""
 import os
 from pathlib import Path
 import sys

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Manga Translator",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Translate Japanese manga pages to Indonesian/English directly in your browser. Powered by AI detection, OCR & contextual LLM translation.",
   "permissions": ["activeTab", "storage", "contextMenus"],
   "host_permissions": ["http://127.0.0.1:8000/*", "http://localhost:8000/*", "<all_urls>"],

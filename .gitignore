@@ -10,7 +10,7 @@
 
 # Local manga samples and generated pipeline output
 api/test-data/manga-pages/
-api/test-data/output/
+api/test-data/builds/
 
 # Build artifacts
 dist/
