@@ -211,7 +211,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           if (finalResult) {
             sendResponse(finalResult);
           } else {
-            sendResponse({ success: false, error: 'Koneksi stream berakhir tanpa data.' });
+            sendResponse({ success: false, error: 'The stream ended without data.' });
           }
         } catch (fetchErr) {
           if (fetchErr.name === 'AbortError') {

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="id">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -223,8 +223,8 @@
 
   <div class="site-card">
     <div class="site-info">
-      <span class="site-domain" id="siteHostname">Memuat web...</span>
-      <span class="site-status disabled" id="statStatus">Nonaktif</span>
+      <span class="site-domain" id="siteHostname">Loading page...</span>
+      <span class="site-status disabled" id="statStatus">Disabled</span>
     </div>
     <label class="toggle-switch">
       <input type="checkbox" id="siteToggle">
@@ -233,7 +233,7 @@
   </div>
 
   <div class="setting-row">
-    <label class="setting-label" for="translator">Penerjemah</label>
+    <label class="setting-label" for="translator">Translator</label>
     <select id="translator">
       <option value="google">Google Translate</option>
       <option value="llm">LLM API</option>
@@ -241,15 +241,15 @@
   </div>
 
   <div class="setting-row">
-    <label class="setting-label" for="targetLang">Bahasa</label>
+    <label class="setting-label" for="targetLang">Language</label>
     <select id="targetLang">
-      <option value="id">Indonesia</option>
+      <option value="id">Indonesian</option>
       <option value="en">English</option>
     </select>
   </div>
 
   <div class="setting-row">
-    <label class="setting-label" for="readingDirection">Arah Baca</label>
+    <label class="setting-label" for="readingDirection">Reading Direction</label>
     <select id="readingDirection">
       <option value="rtl">Manga (RTL)</option>
       <option value="ltr">Manhwa (LTR)</option>
@@ -257,10 +257,10 @@
   </div>
 
   <div class="setting-row">
-    <label class="setting-label" for="loadingStyle">Tampilan Loading</label>
+    <label class="setting-label" for="loadingStyle">Loading Style</label>
     <select id="loadingStyle">
       <option value="default">Default — Spinner &amp; Progress</option>
-      <option value="minimal">Minimal — Ikon di kiri atas</option>
+      <option value="minimal">Minimal — Icon at top left</option>
     </select>
   </div>
 
@@ -270,7 +270,7 @@
   </div>
 
   <button class="btn-action" id="btnTranslate">
-    <span>⚡</span> Scan Ulang
+    <span>⚡</span> Rescan
   </button>
 
   <script src="popup.js"></script>

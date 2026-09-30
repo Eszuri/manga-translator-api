@@ -131,11 +131,11 @@ def transcript_image(image: Image.Image, bubbles, title: str, translated: bool) 
     for bubble in bubbles:
         label = f"#{bubble.id}  ({bubble.bounding_box.x}, {bubble.bounding_box.y})"
         if translated:
-            value = bubble.translation or "[tidak diterjemahkan]"
+            value = bubble.translation or "[not translated]"
             if is_graphic_text(bubble.text or ""):
-                value = "[teks gambar/tanggal dilewati]"
+                value = "[graphic text/date skipped]"
         else:
-            value = bubble.text or "[OCR kosong]"
+            value = bubble.text or "[empty OCR]"
         entries.append((label, wrap_pixels(scratch, value, font, panel_width - 32)))
     line_height = 27
     required_height = 60 + sum(34 + len(lines) * line_height + 14 for _, lines in entries)
@@ -196,7 +196,7 @@ def process_page(path: Path, run_dir: Path, detector, ocr, translator,
     start = time.perf_counter()
     ocr.recognize_all_bubbles(image, bubbles, padding=6)
     timings["ocr_ms"] = round((time.perf_counter() - start) * 1000)
-    transcript_image(image, bubbles, "OCR - teks Jepang", False).save(outputs["03_ocr"])
+    transcript_image(image, bubbles, "OCR - Japanese text", False).save(outputs["03_ocr"])
     write_json(steps_dir / f"{stem}_03_ocr.json", [b.model_dump() for b in bubbles])
 
     start = time.perf_counter()

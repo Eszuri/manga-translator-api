@@ -68,4 +68,4 @@ def verify_gpu_session(session: ort.InferenceSession, component: str) -> str:
 def require_gpu_device(device: str) -> None:
     """Reject legacy CPU/auto request values before any processing begins."""
     if device.lower() != "gpu":
-        raise ValueError("Backend ini GPU-only; parameter device wajib 'gpu'.")
+        raise ValueError("This backend is GPU-only; the device parameter must be 'gpu'.")

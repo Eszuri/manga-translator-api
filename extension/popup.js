@@ -28,7 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } catch (e) {}
     }
-    siteHostname.textContent = 'Halaman ini';
+    siteHostname.textContent = 'This page';
     siteToggle.disabled = true;
   });
 
@@ -53,7 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btnTranslate.style.opacity = '1';
       } else {
         enabledList = enabledList.filter(d => d !== currentDomain);
-        statStatus.textContent = 'Nonaktif';
+        statStatus.textContent = 'Disabled';
         statStatus.classList.add('disabled');
         btnTranslate.disabled = true;
         btnTranslate.style.opacity = '0.5';
@@ -82,7 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     btnTranslate.disabled = true;
     btnTranslate.style.opacity = '0.6';
-    statStatus.textContent = 'Memproses...';
+    statStatus.textContent = 'Processing...';
 
     chrome.tabs.sendMessage(tab.id, { action: 'translateAllImages' }, (response) => {
       setTimeout(() => {
@@ -91,9 +91,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }, 1000);
 
       if (chrome.runtime.lastError) {
-        statStatus.textContent = 'Refresh halaman';
+        statStatus.textContent = 'Refresh the page';
       } else {
-        statStatus.textContent = 'Berjalan...';
+        statStatus.textContent = 'Running...';
       }
     });
   });
@@ -118,7 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btnTranslate.disabled = false;
         btnTranslate.style.opacity = '1';
       } else {
-        statStatus.textContent = 'Nonaktif';
+        statStatus.textContent = 'Disabled';
         statStatus.classList.add('disabled');
         btnTranslate.disabled = true;
         btnTranslate.style.opacity = '0.5';

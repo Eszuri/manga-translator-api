@@ -166,7 +166,7 @@ class MangaTranslator {
 
     if (this.progressBar) {
       const pText = this.progressBar.querySelector('.manga-translator-progress-text');
-      if (pText) pText.textContent = '⚡ Memeriksa cache gambar...';
+      if (pText) pText.textContent = '⚡ Checking image cache...';
     }
 
     if (!options.bypassCache && window.MangaTranslationCache) {
@@ -180,7 +180,7 @@ class MangaTranslator {
 
     if (this.progressBar) {
       const pText = this.progressBar.querySelector('.manga-translator-progress-text');
-      if (pText) pText.textContent = '⏳ Menunggu gambar yang belum ada di cache...';
+      if (pText) pText.textContent = '⏳ Waiting for images that are not cached...';
     }
 
     await this.waitForAllImagesToLoad();
@@ -227,11 +227,11 @@ class MangaTranslator {
       const pText = this.progressBar.querySelector('.manga-translator-progress-text');
       if (pText) {
         if (this.processingQueue.length === 0 && this.activeJobs.size === 0) {
-          pText.textContent = `Semua gambar dipulihkan dari cache (${this.totalProcessed} halaman) ✅`;
+          pText.textContent = `All images restored from cache (${this.totalProcessed} pages) ✅`;
         } else if (restoredFromCache > 0) {
-          pText.textContent = `${restoredFromCache} dipulihkan dari cache • Memproses sisa (${this.processingQueue.length} halaman)...`;
+          pText.textContent = `${restoredFromCache} restored from cache • Processing remaining (${this.processingQueue.length} pages)...`;
         } else {
-          pText.textContent = `Semua gambar termuat (${this.totalImages} halaman) • Memulai...`;
+          pText.textContent = `All images loaded (${this.totalImages} pages) • Starting...`;
         }
       }
     }
@@ -266,7 +266,7 @@ class MangaTranslator {
       if (this.progressBar) {
         const pText = this.progressBar.querySelector('.manga-translator-progress-text');
         if (pText) {
-          pText.textContent = `⏳ Menunggu gambar termuat (${pending.length} tersisa)...`;
+          pText.textContent = `⏳ Waiting for images to load (${pending.length} remaining)...`;
         }
       }
 
@@ -620,11 +620,11 @@ class MangaTranslator {
     const text = loading.querySelector('.manga-translator-loading-text');
 
     const stageNames = {
-      detect: 'Deteksi bubble...',
+      detect: 'Detecting bubbles...',
       ocr: 'OCR...',
-      translate: 'Translate...',
+      translate: 'Translating...',
       inpaint: 'Inpainting...',
-      render: 'Render...'
+      render: 'Rendering...'
     };
 
     const label = stageNames[request.stage] || 'Translate...';
@@ -635,7 +635,7 @@ class MangaTranslator {
       if (pText) {
         const currentIdx = this.totalProcessed + 1;
         const total = this.totalImages || currentIdx;
-        pText.textContent = `Halaman ${currentIdx}/${total} • ${label}`;
+        pText.textContent = `Page ${currentIdx}/${total} • ${label}`;
       }
     }
   }
@@ -653,7 +653,7 @@ class MangaTranslator {
     loading.className = 'manga-translator-loading';
     loading.innerHTML = `
       <div class="manga-translator-loading-spinner"></div>
-      <div class="manga-translator-loading-text">Deteksi bubble...</div>
+      <div class="manga-translator-loading-text">Detecting bubbles...</div>
     `;
     loading.style.display = 'none';
     wrapper.appendChild(loading);
@@ -661,7 +661,7 @@ class MangaTranslator {
     const minimalLoading = document.createElement('div');
     minimalLoading.className = 'manga-translator-minimal-loader';
     minimalLoading.setAttribute('role', 'status');
-    minimalLoading.setAttribute('aria-label', 'Menerjemahkan manga');
+    minimalLoading.setAttribute('aria-label', 'Translating manga');
     minimalLoading.innerHTML = `<img src="${chrome.runtime.getURL('icons/icon.svg')}" alt="">`;
     minimalLoading.style.display = 'none';
     wrapper.appendChild(minimalLoading);
@@ -686,7 +686,7 @@ class MangaTranslator {
     const loading = wrapper.querySelector('.manga-translator-loading');
     if (loading) {
       const text = loading.querySelector('.manga-translator-loading-text');
-      if (text) text.textContent = 'Deteksi bubble...';
+      if (text) text.textContent = 'Detecting bubbles...';
       loading.style.display = 'flex';
     }
   }
@@ -862,7 +862,7 @@ class MangaTranslator {
       this.showProgressBar();
       if (this.isScanning && this.activeJobs.size === 0 && this.processingQueue.length === 0) {
         const text = this.progressBar.querySelector('.manga-translator-progress-text');
-        if (text) text.textContent = '⏳ Menunggu semua gambar di halaman termuat...';
+        if (text) text.textContent = '⏳ Waiting for all page images to load...';
       } else {
         this.updateProgressBar();
       }

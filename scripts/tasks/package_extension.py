@@ -37,10 +37,10 @@ def build():
     dist_dir = root_dir / "dist"
 
     if not (ext_dir / "manifest.json").is_file():
-        print(f"Error: manifest.json tidak ditemukan di {ext_dir}")
+        print(f"Error: manifest.json was not found in {ext_dir}")
         sys.exit(1)
 
-    print("Memulai build extension...")
+    print("Building extension package...")
     dist_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Build .zip
@@ -74,7 +74,7 @@ def build():
         if generated_crx.is_file():
             shutil.move(str(generated_crx), str(crx_path))
 
-    print("\nBuild selesai:")
+    print("\nBuild complete:")
     if crx_path.is_file():
         print(f"- {crx_path.relative_to(root_dir)}")
     print(f"- {zip_path.relative_to(root_dir)}")

@@ -193,7 +193,7 @@ class MangaTranslationService:
                     except (httpx.ConnectError, httpx.TimeoutException) as exc:
                         if attempt == 2:
                             raise RuntimeError(
-                                f"Google Translate tidak dapat dihubungi: {type(exc).__name__}"
+                                f"Google Translate could not be reached: {type(exc).__name__}"
                             ) from exc
                         await asyncio.sleep(0.5 * (2 ** attempt))
                         continue
@@ -211,22 +211,22 @@ class MangaTranslationService:
                 if response is None or response.status_code != 200:
                     status = response.status_code if response is not None else "no response"
                     logger.error("Google Translate request failed with HTTP %s", status)
-                    raise RuntimeError(f"Google Translate gagal (HTTP {status})")
+                    raise RuntimeError(f"Google Translate failed (HTTP {status})")
 
                 try:
                     translated_values = response.json()
                 except ValueError as exc:
-                    raise RuntimeError("Google Translate mengirim respons yang tidak valid") from exc
+                    raise RuntimeError("Google Translate returned an invalid response") from exc
 
                 if not isinstance(translated_values, list) or len(translated_values) != len(batch):
                     raise RuntimeError(
-                        "Google Translate mengirim jumlah hasil yang tidak sesuai"
+                        "Google Translate returned an unexpected number of results"
                     )
 
                 for (b_id, _), translated_value in zip(batch, translated_values):
                     if not isinstance(translated_value, str) or not translated_value.strip():
                         raise RuntimeError(
-                            f"Google Translate tidak menghasilkan teks untuk bubble {b_id}"
+                            f"Google Translate did not return text for bubble {b_id}"
                         )
                     translated_text = unicodedata.normalize("NFKC", translated_value).strip()
                     translated_text = re.sub(r"(?:\s*\.){2,}", "...", translated_text)

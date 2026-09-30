@@ -295,7 +295,7 @@ async def inpaint_stream_manga_page(
     async def stream_generator():
         start_time = time.perf_counter()
         try:
-            yield json.dumps({"stage": "detect", "message": "Mendeteksi bubble teks..."}) + "\n"
+            yield json.dumps({"stage": "detect", "message": "Detecting text bubbles..."}) + "\n"
             await asyncio.sleep(0.01)
 
             detector = get_detector_instance(detector_type, device)
@@ -312,7 +312,7 @@ async def inpaint_stream_manga_page(
             if typeset and ordered_bubbles:
                 yield json.dumps({
                     "stage": "ocr",
-                    "message": f"Membaca teks OCR ({len(ordered_bubbles)} bubble)...",
+                    "message": f"Reading OCR text ({len(ordered_bubbles)} bubbles)...",
                     "total_bubbles": len(ordered_bubbles)
                 }) + "\n"
                 await asyncio.sleep(0.01)
@@ -322,7 +322,7 @@ async def inpaint_stream_manga_page(
 
                 yield json.dumps({
                     "stage": "translate",
-                    "message": f"Menerjemahkan {len(ordered_bubbles)} dialog...",
+                    "message": f"Translating {len(ordered_bubbles)} dialogues...",
                     "total_bubbles": len(ordered_bubbles)
                 }) + "\n"
                 await asyncio.sleep(0.01)
@@ -334,18 +334,18 @@ async def inpaint_stream_manga_page(
             else:
                 yield json.dumps({
                     "stage": "ocr",
-                    "message": "Tidak ada bubble teks ditemukan...",
+                    "message": "No text bubbles found...",
                     "total_bubbles": 0
                 }) + "\n"
                 await asyncio.sleep(0.01)
 
-            yield json.dumps({"stage": "inpaint", "message": "Menghapus teks asli (Inpainting)..."}) + "\n"
+            yield json.dumps({"stage": "inpaint", "message": "Removing original text (inpainting)..."}) + "\n"
             await asyncio.sleep(0.01)
 
             inpaint_service = MangaInpaintingService()
             inpainted_img = inpaint_service.inpaint(image, seg_mask=seg_mask, bubbles=ordered_bubbles)
 
-            yield json.dumps({"stage": "render", "message": "Rendering & typesetting teks..."}) + "\n"
+            yield json.dumps({"stage": "render", "message": "Rendering and typesetting text..."}) + "\n"
             await asyncio.sleep(0.01)
 
             if typeset and ordered_bubbles:
@@ -364,7 +364,7 @@ async def inpaint_stream_manga_page(
             duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
             yield json.dumps({
                 "stage": "done",
-                "message": "Selesai",
+                "message": "Complete",
                 "image_base64": f"data:image/jpeg;base64,{img_b64}",
                 "total_detected": len(ordered_bubbles),
                 "duration_ms": duration_ms
