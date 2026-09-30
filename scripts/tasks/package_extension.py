@@ -32,7 +32,7 @@ def find_browser():
 
 
 def build():
-    root_dir = Path(__file__).resolve().parents[1]
+    root_dir = Path(__file__).resolve().parents[2]
     ext_dir = root_dir / "extension"
     dist_dir = root_dir / "dist"
 

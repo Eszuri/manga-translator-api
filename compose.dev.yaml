@@ -11,8 +11,8 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: ./api/docker-entrypoint.py
-        target: /app/docker-entrypoint.py
+        source: ./api/tools
+        target: /app/tools
         read_only: true
         bind:
           create_host_path: false

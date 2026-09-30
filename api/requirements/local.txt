@@ -1,4 +1,4 @@
--r requirements.txt
+-r base.txt
 # Local Windows runtime: DirectX 12 / DirectML GPU acceleration.
 onnxruntime-directml==1.24.4
 # Manga OCR (ViT + RoBERTa Transformer)

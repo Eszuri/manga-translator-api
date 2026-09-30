@@ -30,7 +30,7 @@ from app.services.translation_service import get_translation_service
 from app.services.typesetting_service import MangaTypesettingService
 
 
-BASE_DIR = Path(__file__).resolve().parent
+API_DIR = Path(__file__).resolve().parents[1]
 STAGES = (
     "01_box",
     "02_text_box",
@@ -57,7 +57,7 @@ def parse_args():
 
 
 def resolve_from_api(path: Path) -> Path:
-    return path if path.is_absolute() else BASE_DIR / path
+    return path if path.is_absolute() else API_DIR / path
 
 
 def select_images(directory: Path, name: str | None, limit: int) -> list[Path]:

@@ -11,8 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
     && groupadd --gid 10001 translator \
     && useradd --uid 10001 --gid translator --create-home translator
 
-COPY requirements*.txt ./
-RUN python -m pip install --no-cache-dir -r requirements-docker.txt
+COPY requirements ./requirements
+RUN python -m pip install --no-cache-dir -r requirements/docker.txt
 RUN mkdir -p /home/translator/.cache/huggingface \
     && chown -R translator:translator /home/translator/.cache
 
@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 FROM gpu-runtime AS gpu
 COPY --chown=translator:translator app ./app
-COPY --chown=translator:translator docker-entrypoint.py ./docker-entrypoint.py
+COPY --chown=translator:translator tools ./tools
 USER translator
 EXPOSE 8000
-CMD ["python", "docker-entrypoint.py"]
+CMD ["python", "-m", "tools.run_container"]
