@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.11-slim-bookworm AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -19,8 +20,10 @@ RUN mkdir -p /home/translator/.cache/huggingface \
 
 FROM base AS gpu
 USER root
-RUN python -m pip uninstall -y onnxruntime \
-    && python -m pip install --no-cache-dir "onnxruntime-gpu[cuda,cudnn]==1.26.0"
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip cache purge \
+    && python -m pip uninstall -y onnxruntime \
+    && python -m pip install --default-timeout=1800 --retries=10 "onnxruntime-gpu[cuda,cudnn]==1.26.0"
 USER translator
 EXPOSE 8000
 CMD ["python", "docker-entrypoint.py"]
