@@ -1,0 +1,31 @@
+FROM python:3.11-slim-bookworm AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/home/translator/.cache/huggingface
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 translator \
+    && useradd --uid 10001 --gid translator --create-home translator
+
+COPY requirements*.txt ./
+RUN python -m pip install --no-cache-dir -r requirements-docker.txt
+COPY --chown=translator:translator app ./app
+COPY --chown=translator:translator docker-entrypoint.py ./docker-entrypoint.py
+RUN mkdir -p /home/translator/.cache/huggingface \
+    && chown -R translator:translator /home/translator/.cache
+
+FROM base AS gpu
+USER root
+RUN python -m pip uninstall -y onnxruntime \
+    && python -m pip install --no-cache-dir "onnxruntime-gpu[cuda,cudnn]==1.26.0"
+USER translator
+EXPOSE 8000
+CMD ["python", "docker-entrypoint.py"]
+
+FROM base AS cpu
+USER translator
+EXPOSE 8000
+CMD ["python", "docker-entrypoint.py"]

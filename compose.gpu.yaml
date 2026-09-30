@@ -1,0 +1,13 @@
+services:
+  api:
+    gpus: all
+    build:
+      target: gpu
+    image: manga-translator-api:gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
