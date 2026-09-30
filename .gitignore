@@ -1,11 +1,18 @@
-*.png
-*.jpg
-/**/*__pycache__/
-/**/*/tests
+# Python
+**/__pycache__/
+*.py[cod]
+.venv*/
+
+# Local configuration and model files
 *.onnx
 **/models/
-.venv-gpu/
-.venv-cuda/
-*.json
 .env
-api/image test/layout_review/
+
+# Local manga samples and generated pipeline output
+api/test-data/manga-pages/
+api/test-data/output/
+
+# Build artifacts
+dist/
+*.crx
+*.pem

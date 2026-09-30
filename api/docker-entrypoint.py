@@ -1,4 +1,5 @@
 """Validate mounted assets before starting the container API."""
+import os
 from pathlib import Path
 import sys
 
@@ -23,5 +24,15 @@ if __name__ == "__main__":
             print(f"  {name}", file=sys.stderr)
         sys.exit(1)
 
+    reload_enabled = os.getenv("API_RELOAD", "False").lower() in ("true", "1", "yes")
+
     # A single process avoids duplicating ONNX models and their memory usage.
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, workers=1)
+    # Development can enable reload while production keeps an immutable process.
+    uvicorn.run(
+        "app.main:app",
+        host=os.getenv("API_HOST", "0.0.0.0"),
+        port=int(os.getenv("API_PORT", "8000")),
+        workers=1,
+        reload=reload_enabled,
+        reload_dirs=["/app/app"] if reload_enabled else None,
+    )

@@ -93,8 +93,8 @@ class GoogleTestTranslationService:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Single end-to-end manga visual test")
-    parser.add_argument("--dir", type=Path, default=Path("image test"))
-    parser.add_argument("--output-root", type=Path, default=Path("image test/output_pipeline"))
+    parser.add_argument("--dir", type=Path, default=Path("test-data/manga-pages"))
+    parser.add_argument("--output-root", type=Path, default=Path("test-data/output"))
     parser.add_argument("--image", help="One input filename, e.g. 009.jpg")
     parser.add_argument("--limit", type=int, default=0, help="Pages to process; 0 means all")
     parser.add_argument("--device", choices=("auto", "gpu", "cpu"), default="gpu")

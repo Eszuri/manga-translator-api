@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import json
@@ -152,52 +153,115 @@ class MangaTranslationService:
         dialogue_items: List[Dict[str, Any]],
         target_lang: str = "id"
     ) -> Dict[int, str]:
-        """Translates dialogue items using Google Translate (fast & free)."""
+        """Translate dialogue items with Google's Chrome translation endpoint.
+
+        Requests are batched to avoid sending one HTTP request per speech bubble.
+        Translation failures are raised so the pipeline cannot silently inpaint the
+        source text and render the untranslated Japanese text again.
+        """
         import unicodedata
 
         results: Dict[int, str] = {}
         target_code = "id" if target_lang.lower() in ("id", "indonesian") else "en"
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            for item in dialogue_items:
-                b_id = item["id"]
-                original = item.get("text", "").strip()
-                if not original:
-                    results[b_id] = ""
-                    continue
+        pending: List[Tuple[int, str]] = []
+        for item in dialogue_items:
+            b_id = item["id"]
+            original = item.get("text", "").strip()
+            if not original:
+                results[b_id] = ""
+                continue
 
-                compact = re.sub(r"\s+", "", original)
-                if re.fullmatch(r"[.．…・·｡。⋯･]+", compact):
-                    results[b_id] = "..."
-                    continue
-                elif re.fullmatch(r"[!！]+", compact):
-                    results[b_id] = "!"
-                    continue
-                elif re.fullmatch(r"[?？]+", compact):
-                    results[b_id] = "?"
-                    continue
+            compact = re.sub(r"\s+", "", original)
+            if re.fullmatch(r"[.．…・·｡。⋯･]+", compact):
+                results[b_id] = "..."
+            elif re.fullmatch(r"[!！]+", compact):
+                results[b_id] = "!"
+            elif re.fullmatch(r"[?？]+", compact):
+                results[b_id] = "?"
+            else:
+                pending.append((b_id, original))
+
+        if not pending:
+            return results
+
+        # Keep GET URLs comfortably below common proxy/server URL limits while
+        # still translating most manga pages in one request.
+        batches: List[List[Tuple[int, str]]] = []
+        current_batch: List[Tuple[int, str]] = []
+        current_chars = 0
+        for entry in pending:
+            encoded_size = len(entry[1].encode("utf-8")) * 3
+            if current_batch and (len(current_batch) >= 50 or current_chars + encoded_size > 6000):
+                batches.append(current_batch)
+                current_batch = []
+                current_chars = 0
+            current_batch.append(entry)
+            current_chars += encoded_size
+        if current_batch:
+            batches.append(current_batch)
+
+        url = "https://clients5.google.com/translate_a/t"
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 Chrome/131.0.0.0 Safari/537.36",
+        }
+        timeout = httpx.Timeout(30.0, connect=10.0)
+
+        async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
+            for batch in batches:
+                params: List[Tuple[str, str]] = [
+                    ("client", "dict-chrome-ex"),
+                    ("sl", "ja"),
+                    ("tl", target_code),
+                ]
+                params.extend(("q", original) for _, original in batch)
+
+                response: Optional[httpx.Response] = None
+                for attempt in range(3):
+                    try:
+                        response = await client.get(url, params=params)
+                    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                        if attempt == 2:
+                            raise RuntimeError(
+                                f"Google Translate tidak dapat dihubungi: {type(exc).__name__}"
+                            ) from exc
+                        await asyncio.sleep(0.5 * (2 ** attempt))
+                        continue
+
+                    if response.status_code == 200:
+                        break
+                    if response.status_code == 429 or response.status_code >= 500:
+                        if attempt < 2:
+                            retry_after = response.headers.get("Retry-After", "")
+                            delay = float(retry_after) if retry_after.isdigit() else 0.5 * (2 ** attempt)
+                            await asyncio.sleep(min(delay, 5.0))
+                            continue
+                    break
+
+                if response is None or response.status_code != 200:
+                    status = response.status_code if response is not None else "no response"
+                    logger.error("Google Translate request failed with HTTP %s", status)
+                    raise RuntimeError(f"Google Translate gagal (HTTP {status})")
 
                 try:
-                    url = "https://translate.googleapis.com/translate_a/single"
-                    params = {
-                        "client": "gtx",
-                        "sl": "ja",
-                        "tl": target_code,
-                        "dt": "t",
-                        "q": original
-                    }
-                    resp = await client.get(url, params=params)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        translated_text = "".join([segment[0] for segment in data[0] if segment and segment[0]])
-                        translated_text = unicodedata.normalize("NFKC", translated_text).strip()
-                        translated_text = re.sub(r"(?:\s*\.){2,}", "...", translated_text)
-                        results[b_id] = translated_text
-                    else:
-                        results[b_id] = original
-                except Exception as e:
-                    logger.warning(f"Google translate error for bubble {b_id}: {e}")
-                    results[b_id] = original
+                    translated_values = response.json()
+                except ValueError as exc:
+                    raise RuntimeError("Google Translate mengirim respons yang tidak valid") from exc
+
+                if not isinstance(translated_values, list) or len(translated_values) != len(batch):
+                    raise RuntimeError(
+                        "Google Translate mengirim jumlah hasil yang tidak sesuai"
+                    )
+
+                for (b_id, _), translated_value in zip(batch, translated_values):
+                    if not isinstance(translated_value, str) or not translated_value.strip():
+                        raise RuntimeError(
+                            f"Google Translate tidak menghasilkan teks untuk bubble {b_id}"
+                        )
+                    translated_text = unicodedata.normalize("NFKC", translated_value).strip()
+                    translated_text = re.sub(r"(?:\s*\.){2,}", "...", translated_text)
+                    results[b_id] = translated_text
 
         return results
 

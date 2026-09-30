@@ -1,0 +1,18 @@
+services:
+  api:
+    environment:
+      API_DEBUG: "True"
+      API_RELOAD: "True"
+    volumes:
+      - type: bind
+        source: ./api/app
+        target: /app/app
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./api/docker-entrypoint.py
+        target: /app/docker-entrypoint.py
+        read_only: true
+        bind:
+          create_host_path: false
