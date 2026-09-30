@@ -21,7 +21,6 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from app.services.comic_text_detector import ComicTextDetector
 from app.services.detector import (
-    ContourBubbleDetector,
     annotate_and_save_bubbles,
     sort_manga_reading_order,
 )
@@ -97,8 +96,8 @@ def parse_args():
     parser.add_argument("--output-root", type=Path, default=Path("test-data/output"))
     parser.add_argument("--image", help="One input filename, e.g. 009.jpg")
     parser.add_argument("--limit", type=int, default=0, help="Pages to process; 0 means all")
-    parser.add_argument("--device", choices=("auto", "gpu", "cpu"), default="gpu")
-    parser.add_argument("--detector", choices=("hybrid", "comic_text_detector", "contour"),
+    parser.add_argument("--device", choices=("gpu",), default="gpu")
+    parser.add_argument("--detector", choices=("hybrid", "comic_text_detector"),
                         default="hybrid")
     parser.add_argument("--target-lang", choices=("id", "en"), default="id")
     parser.add_argument("--font-scale", type=float, default=1.0)
@@ -130,9 +129,7 @@ def select_images(directory: Path, name: str | None, limit: int) -> list[Path]:
 
 
 def make_detector(kind: str, device: str):
-    if kind == "contour":
-        return ContourBubbleDetector()
-    comic_detector = ComicTextDetector(device=device, require_gpu=(device == "gpu"))
+    comic_detector = ComicTextDetector(device="gpu", require_gpu=True)
     if kind == "comic_text_detector":
         return comic_detector
     return HybridBubbleDetector(comic_detector=comic_detector)
@@ -288,7 +285,7 @@ def main() -> int:
     print(f"Pages: {len(images)} | device: {args.device} | translation: Google (test only)")
     print(f"Output: {run_dir}")
     detector = make_detector(args.detector, args.device)
-    ocr = MangaOcrService(device=args.device, require_gpu=(args.device == "gpu"))
+    ocr = MangaOcrService(device="gpu", require_gpu=True)
     translator = GoogleTestTranslationService()
     inpainter = MangaInpaintingService()
     typesetter = MangaTypesettingService()

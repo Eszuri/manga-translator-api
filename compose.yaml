@@ -6,8 +6,9 @@ services:
       - "host.docker.internal:host-gateway"
     build:
       context: ./api
-      target: cpu
-    image: manga-translator-api:cpu
+      target: gpu
+    image: manga-translator-api:gpu
+    gpus: all
     restart: unless-stopped
     init: true
     env_file:
@@ -16,6 +17,7 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: "8000"
       API_DEBUG: "False"
+      GPU_PROVIDER: CUDAExecutionProvider
       HF_HOME: /home/translator/.cache/huggingface
     ports:
       - "${DOCKER_BIND_IP:-0.0.0.0}:${DOCKER_API_PORT:-8000}:8000"
@@ -38,6 +40,13 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
 volumes:
   huggingface-cache:

@@ -133,7 +133,7 @@ document.addEventListener('DOMContentLoaded', () => {
       readingDirection: 'rtl',
       translationMode: 'inpaint',
       detectorType: 'hybrid',
-      device: 'auto',
+      device: 'gpu',
       fontScale: 1.0,
       allCaps: true,
       autoTranslate: true,

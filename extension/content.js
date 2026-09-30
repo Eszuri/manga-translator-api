@@ -48,7 +48,7 @@ class MangaTranslator {
         translator: 'google',
         detectorType: 'hybrid',
         readingDirection: 'rtl',
-        device: 'auto',
+        device: 'gpu',
         fontScale: 1.0,
         allCaps: true,
         loadingStyle: 'default',
@@ -592,9 +592,11 @@ class MangaTranslator {
         mimeType: 'image/jpeg',
         target_lang: settings.targetLang,
         translator: settings.translator || 'llm',
-        detector_type: settings.detectorType,
+        detector_type: settings.detectorType === 'comic_text_detector'
+          ? 'comic_text_detector'
+          : 'hybrid',
         reading_direction: settings.readingDirection,
-        device: settings.device,
+        device: 'gpu',
         typeset: 'true',
         font_scale: String(settings.fontScale),
         all_caps: String(settings.allCaps)

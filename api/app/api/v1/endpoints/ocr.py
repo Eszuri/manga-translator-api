@@ -5,34 +5,32 @@ from pydantic import BaseModel, Field
 
 from app.api.v1.image_uploads import read_validated_image
 from app.schemas import DetectBubblesResponse, DetectedBubble
-from app.services.detector import ContourBubbleDetector, sort_manga_reading_order
+from app.core.gpu import require_gpu_device
+from app.services.detector import sort_manga_reading_order
 from app.services.ocr_service import get_ocr_service
 
 router = APIRouter()
 
-_contour_detector = None
 _comic_detector = None
 _hybrid_detector = None
 
 
 def get_detector_instance(detector_type: str, device: str):
-    global _contour_detector, _comic_detector, _hybrid_detector
+    global _comic_detector, _hybrid_detector
+    require_gpu_device(device)
     if detector_type == "comic_text_detector":
         if _comic_detector is None:
             from app.services.comic_text_detector import ComicTextDetector
-            _comic_detector = ComicTextDetector(device=device)
+            _comic_detector = ComicTextDetector(device="gpu", require_gpu=True)
         return _comic_detector
     elif detector_type == "hybrid":
         if _hybrid_detector is None:
             from app.services.hybrid_detector import HybridBubbleDetector
             from app.services.comic_text_detector import ComicTextDetector
-            comic_det = ComicTextDetector(device=device)
+            comic_det = ComicTextDetector(device="gpu", require_gpu=True)
             _hybrid_detector = HybridBubbleDetector(comic_detector=comic_det)
         return _hybrid_detector
-    else:
-        if _contour_detector is None:
-            _contour_detector = ContourBubbleDetector()
-        return _contour_detector
+    raise ValueError("GPU-only backend does not support the CPU contour detector.")
 
 
 class CropOCRResponse(BaseModel):
@@ -44,7 +42,7 @@ class CropOCRResponse(BaseModel):
 @router.post("/recognize", response_model=DetectBubblesResponse)
 async def recognize_page_text(
     file: UploadFile = File(..., description="Manga page image file (JPEG, PNG, WebP)"),
-    detector_type: Literal["hybrid", "comic_text_detector", "contour"] = Form(
+    detector_type: Literal["hybrid", "comic_text_detector"] = Form(
         "hybrid",
         description="Text/bubble detector engine ('hybrid' recommended for optimal accuracy)"
     ),
@@ -52,9 +50,9 @@ async def recognize_page_text(
         "rtl",
         description="Reading direction ('rtl' for Japanese Manga, 'ltr' for Manhwa)"
     ),
-    device: Literal["auto", "gpu", "cpu"] = Form(
-        "auto",
-        description="Compute device: 'gpu' (DirectML), 'cpu', or 'auto'"
+    device: Literal["gpu"] = Form(
+        "gpu",
+        description="GPU-only backend; the only accepted value is 'gpu'"
     )
 ):
     """
@@ -90,9 +88,9 @@ async def recognize_page_text(
 @router.post("/recognize-crop", response_model=CropOCRResponse)
 async def recognize_crop_text(
     file: UploadFile = File(..., description="Cropped text image (manual box selection from extension)"),
-    device: Literal["auto", "gpu", "cpu"] = Form(
-        "auto",
-        description="Compute device: 'gpu' (DirectML), 'cpu', or 'auto'"
+    device: Literal["gpu"] = Form(
+        "gpu",
+        description="GPU-only backend; the only accepted value is 'gpu'"
     )
 ):
     """

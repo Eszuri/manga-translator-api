@@ -6,6 +6,7 @@ import cv2
 import onnxruntime as ort
 
 from app.schemas import BoundingBox, DetectedBubble
+from app.core.gpu import configure_gpu_session, require_gpu_device, verify_gpu_session
 from app.services.detector import BaseBubbleDetector, sort_manga_reading_order
 from app.services.balloon_geometry import refine_text_boxes
 
@@ -56,28 +57,20 @@ class ComicTextDetector(BaseBubbleDetector):
         conf_threshold: float = 0.35,
         nms_threshold: float = 0.35,
         num_threads: int = 4,
-        require_gpu: bool = False,
-        device: str = "auto"
+        require_gpu: bool = True,
+        device: str = "gpu"
     ):
         self.model_path = model_path or DEFAULT_MODEL_PATH
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.num_threads = num_threads
         
-        target_device = "gpu" if require_gpu else device.lower()
-        if target_device not in ("auto", "gpu", "cpu"):
-            target_device = "auto"
-        self.target_device = target_device
+        require_gpu_device(device)
+        self.target_device = "gpu"
 
         self._init_session()
 
-        if self.target_device == "gpu":
-            if not {"CUDAExecutionProvider", "DmlExecutionProvider"}.intersection(self.session.get_providers()):
-                raise RuntimeError(
-                    "GPU required but neither CUDA nor DirectML is active. "
-                    "Use .venv-gpu/Scripts/python.exe and install requirements-gpu.txt."
-                )
-            self.session.disable_fallback()
+        verify_gpu_session(self.session, "Comic text detector")
 
     def _init_session(self):
         """Initializes or reuses the ONNX inference session."""
@@ -111,37 +104,10 @@ class ComicTextDetector(BaseBubbleDetector):
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         opts.intra_op_num_threads = self.num_threads
 
-        available_providers = ort.get_available_providers()
-        
-        if self.target_device == "cpu":
-            providers = ["CPUExecutionProvider"]
-        elif self.target_device == "gpu":
-            if "CUDAExecutionProvider" in available_providers and hasattr(ort, "preload_dlls"):
-                ort.preload_dlls()
-            if "CUDAExecutionProvider" in available_providers:
-                providers = ["CUDAExecutionProvider"]
-            elif "DmlExecutionProvider" in available_providers:
-                opts.enable_mem_pattern = False
-                opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-                providers = ["DmlExecutionProvider"]
-            else:
-                raise RuntimeError(
-                    "Target device 'gpu' specified, but no GPU provider (CUDA/DirectML) found in ONNX Runtime. "
-                    f"Available providers: {available_providers}"
-                )
-        else:
-            if "CUDAExecutionProvider" in available_providers and hasattr(ort, "preload_dlls"):
-                ort.preload_dlls()
-            if "CUDAExecutionProvider" in available_providers:
-                providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-            elif "DmlExecutionProvider" in available_providers:
-                opts.enable_mem_pattern = False
-                opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-                providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
-            else:
-                providers = ["CPUExecutionProvider"]
+        providers = configure_gpu_session(opts)
 
         self.session = ort.InferenceSession(self.model_path, opts, providers=providers)
+        verify_gpu_session(self.session, "Comic text detector")
         self.device_name = self._compute_device_name()
         ComicTextDetector._shared_session = self.session
         ComicTextDetector._shared_model_path = self.model_path
@@ -153,7 +119,7 @@ class ComicTextDetector(BaseBubbleDetector):
             return "GPU (NVIDIA CUDA)"
         elif "DmlExecutionProvider" in active:
             return "GPU (DirectML - DirectX Hardware Acceleration)"
-        return "CPU (Host Processor)"
+        raise RuntimeError(f"Comic text detector has no active GPU provider: {active}")
 
     def detect_raw(self, image: Image.Image) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float, Tuple[float, float]]:
         """

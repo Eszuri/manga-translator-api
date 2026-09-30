@@ -18,7 +18,7 @@ class HybridBubbleDetector(BaseBubbleDetector):
     def __init__(self, comic_detector: Optional[ComicTextDetector] = None,
                  conf_threshold: float = 0.35, nms_threshold: float = 0.35,
                  white_threshold: int = 195, num_threads: int = 4,
-                 require_gpu: bool = False, device: str = 'auto'):
+                 require_gpu: bool = True, device: str = 'gpu'):
         self.comic_detector = comic_detector or ComicTextDetector(
             conf_threshold=conf_threshold, nms_threshold=nms_threshold,
             num_threads=num_threads, require_gpu=require_gpu, device=device)

@@ -4,11 +4,10 @@ from fastapi import APIRouter, UploadFile, File, Form
 
 from app.api.v1.image_uploads import read_validated_image
 from app.schemas import DetectBubblesResponse
-from app.services.detector import ContourBubbleDetector, sort_manga_reading_order
+from app.services.detector import sort_manga_reading_order
 
 router = APIRouter()
 
-contour_detector = ContourBubbleDetector()
 _comic_text_detector = None
 _hybrid_detector = None
 
@@ -17,7 +16,7 @@ def get_comic_text_detector():
     global _comic_text_detector
     if _comic_text_detector is None:
         from app.services.comic_text_detector import ComicTextDetector
-        _comic_text_detector = ComicTextDetector()
+        _comic_text_detector = ComicTextDetector(device="gpu", require_gpu=True)
     return _comic_text_detector
 
 
@@ -25,7 +24,7 @@ def get_hybrid_detector():
     global _hybrid_detector
     if _hybrid_detector is None:
         from app.services.hybrid_detector import HybridBubbleDetector
-        _hybrid_detector = HybridBubbleDetector()
+        _hybrid_detector = HybridBubbleDetector(device="gpu", require_gpu=True)
     return _hybrid_detector
 
 
@@ -36,9 +35,9 @@ async def detect_bubbles(
         "rtl", 
         description="Reading direction: 'rtl' (Japanese Manga) or 'ltr' (Korean Manhwa / Webtoon)"
     ),
-    detector_type: Literal["hybrid", "comic_text_detector", "contour"] = Form(
+    detector_type: Literal["hybrid", "comic_text_detector"] = Form(
         "hybrid",
-        description="Detector engine: 'hybrid' (AI + OpenCV Balloon - Recommended), 'comic_text_detector' (Deep Learning AI), or 'contour' (OpenCV)"
+        description="GPU-backed detector: 'hybrid' or 'comic_text_detector'"
     )
 ):
     """
@@ -54,7 +53,7 @@ async def detect_bubbles(
     elif detector_type == "hybrid":
         active_detector = get_hybrid_detector()
     else:
-        active_detector = contour_detector
+        raise ValueError("GPU-only backend does not support the CPU contour detector.")
 
     detected = active_detector.detect(image)
     ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)

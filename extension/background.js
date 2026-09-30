@@ -3,7 +3,7 @@ const DEFAULT_SETTINGS = {
   targetLang: 'id',
   detectorType: 'hybrid',
   readingDirection: 'rtl',
-  device: 'auto',
+  device: 'gpu',
   translationMode: 'inpaint',
   fontScale: 1.0,
   allCaps: true,
@@ -270,6 +270,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.sync.get({ detectorType: 'hybrid' }, (settings) => {
+    chrome.storage.sync.set({
+      device: 'gpu',
+      detectorType: settings.detectorType === 'comic_text_detector'
+        ? 'comic_text_detector'
+        : 'hybrid'
+    });
+  });
   chrome.contextMenus.create({
     id: "translateMangaPage",
     title: "Translate this Manga Page",
@@ -295,9 +303,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const formData = new FormData();
       formData.append('file', imgBlob, 'image.jpg');
       formData.append('target_lang', settings.targetLang);
-      formData.append('detector_type', settings.detectorType);
+      formData.append(
+        'detector_type',
+        settings.detectorType === 'comic_text_detector' ? 'comic_text_detector' : 'hybrid'
+      );
       formData.append('reading_direction', settings.readingDirection);
-      formData.append('device', settings.device);
+      formData.append('device', 'gpu');
       formData.append('typeset', 'true');
       formData.append('font_scale', settings.fontScale.toString());
       formData.append('all_caps', settings.allCaps.toString());

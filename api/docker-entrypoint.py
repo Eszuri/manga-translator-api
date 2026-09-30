@@ -5,6 +5,8 @@ import sys
 
 import uvicorn
 
+from app.core.gpu import required_gpu_provider
+
 
 if __name__ == "__main__":
     model_dir = Path("/app/app/models")
@@ -23,6 +25,13 @@ if __name__ == "__main__":
         for name in missing:
             print(f"  {name}", file=sys.stderr)
         sys.exit(1)
+
+    try:
+        provider = required_gpu_provider()
+    except RuntimeError as exc:
+        print(f"Strict GPU startup rejected: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Strict GPU inference enabled with {provider}")
 
     reload_enabled = os.getenv("API_RELOAD", "False").lower() in ("true", "1", "yes")
 

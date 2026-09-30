@@ -10,6 +10,7 @@ import jaconv
 from transformers import ViTImageProcessorPil as ViTImageProcessor, BertJapaneseTokenizer
 
 from app.schemas import DetectedBubble
+from app.core.gpu import configure_gpu_session, require_gpu_device, verify_gpu_session
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ class MangaOcrService:
     """
     Japanese Manga OCR Engine based on Vision Transformer (ViT + RoBERTa) in ONNX format.
     Optimized for high-accuracy recognition of vertical/horizontal text, kanji, and furigana.
-    Supports GPU DirectML acceleration and CPU execution.
+    Requires NVIDIA CUDA or DirectML GPU execution; CPU inference is disabled.
     """
     _shared_instance: Optional["MangaOcrService"] = None
     _shared_device: Optional[str] = None
@@ -28,17 +29,15 @@ class MangaOcrService:
     def __init__(
         self,
         model_dir: Optional[str] = None,
-        device: str = "auto",
-        require_gpu: bool = False,
+        device: str = "gpu",
+        require_gpu: bool = True,
         num_threads: int = 4
     ):
         self.model_dir = model_dir or DEFAULT_OCR_DIR
         self.num_threads = num_threads
 
-        target_device = "gpu" if require_gpu else device.lower()
-        if target_device not in ("auto", "gpu", "cpu"):
-            target_device = "auto"
-        self.target_device = target_device
+        require_gpu_device(device)
+        self.target_device = "gpu"
 
         self._init_models()
 
@@ -61,43 +60,14 @@ class MangaOcrService:
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         opts.intra_op_num_threads = self.num_threads
 
-        available_providers = ort.get_available_providers()
-
-        if self.target_device == "cpu":
-            providers = ["CPUExecutionProvider"]
-        elif self.target_device == "gpu":
-            if "CUDAExecutionProvider" in available_providers and hasattr(ort, "preload_dlls"):
-                ort.preload_dlls()
-            if "CUDAExecutionProvider" in available_providers:
-                providers = ["CUDAExecutionProvider"]
-            elif "DmlExecutionProvider" in available_providers:
-                opts.enable_mem_pattern = False
-                opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-                providers = ["DmlExecutionProvider"]
-            else:
-                raise RuntimeError(
-                    "Target device 'gpu' requested for OCR, but no GPU provider (CUDA/DirectML) found. "
-                    f"Available providers: {available_providers}"
-                )
-        else:
-            if "CUDAExecutionProvider" in available_providers and hasattr(ort, "preload_dlls"):
-                ort.preload_dlls()
-            if "CUDAExecutionProvider" in available_providers:
-                providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-            elif "DmlExecutionProvider" in available_providers:
-                opts.enable_mem_pattern = False
-                opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-                providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
-            else:
-                providers = ["CPUExecutionProvider"]
+        providers = configure_gpu_session(opts)
 
         logger.info(f"Manga-OCR active providers: {providers}")
         self.encoder_session = ort.InferenceSession(encoder_path, opts, providers=providers)
         self.decoder_session = ort.InferenceSession(decoder_path, opts, providers=providers)
 
-        if self.target_device == "gpu":
-            self.encoder_session.disable_fallback()
-            self.decoder_session.disable_fallback()
+        verify_gpu_session(self.encoder_session, "Manga OCR encoder")
+        verify_gpu_session(self.decoder_session, "Manga OCR decoder")
 
         self.device_name = self._compute_device_name()
 
@@ -107,7 +77,7 @@ class MangaOcrService:
             return "GPU (NVIDIA CUDA)"
         elif "DmlExecutionProvider" in active:
             return "GPU (DirectML - DirectX Hardware Acceleration)"
-        return "CPU (Host Processor)"
+        raise RuntimeError(f"Manga OCR has no active GPU provider: {active}")
 
     def recognize_crop(self, image: Image.Image, max_length: int = 300) -> str:
         """
@@ -126,11 +96,7 @@ class MangaOcrService:
                 "input_ids": input_ids,
                 "encoder_hidden_states": last_hidden_state
             }
-            try:
-                logits = self.decoder_session.run(None, decoder_inputs)[0]
-            except Exception as e:
-                logger.error(f"Decoder run failed: {e}")
-                break
+            logits = self.decoder_session.run(None, decoder_inputs)[0]
 
             next_token = int(np.argmax(logits[:, -1, :], axis=-1)[0])
             input_ids = np.concatenate([input_ids, np.array([[next_token]], dtype=np.int64)], axis=-1)
@@ -189,9 +155,10 @@ class MangaOcrService:
         return bubbles
 
 
-def get_ocr_service(device: str = "auto", require_gpu: bool = False) -> MangaOcrService:
+def get_ocr_service(device: str = "gpu", require_gpu: bool = True) -> MangaOcrService:
     """Returns singleton instance of MangaOcrService."""
-    target_dev = "gpu" if require_gpu else device.lower()
+    require_gpu_device(device)
+    target_dev = "gpu"
     if (
         MangaOcrService._shared_instance is not None
         and MangaOcrService._shared_device == target_dev

@@ -17,7 +17,8 @@ from app.schemas import (
     TranslateDialoguesResponse,
     TranslatedDialogueItem
 )
-from app.services.detector import ContourBubbleDetector, sort_manga_reading_order
+from app.core.gpu import require_gpu_device
+from app.services.detector import sort_manga_reading_order
 from app.services.ocr_service import get_ocr_service
 from app.services.translation_service import get_translation_service
 from app.services.inpainting_service import MangaInpaintingService
@@ -25,29 +26,26 @@ from app.services.typesetting_service import MangaTypesettingService
 
 router = APIRouter()
 
-_contour_detector = None
 _comic_detector = None
 _hybrid_detector = None
 
 
 def get_detector_instance(detector_type: str, device: str):
-    global _contour_detector, _comic_detector, _hybrid_detector
+    global _comic_detector, _hybrid_detector
+    require_gpu_device(device)
     if detector_type == "comic_text_detector":
         if _comic_detector is None:
             from app.services.comic_text_detector import ComicTextDetector
-            _comic_detector = ComicTextDetector(device=device)
+            _comic_detector = ComicTextDetector(device="gpu", require_gpu=True)
         return _comic_detector
     elif detector_type == "hybrid":
         if _hybrid_detector is None:
             from app.services.hybrid_detector import HybridBubbleDetector
             from app.services.comic_text_detector import ComicTextDetector
-            comic_det = ComicTextDetector(device=device)
+            comic_det = ComicTextDetector(device="gpu", require_gpu=True)
             _hybrid_detector = HybridBubbleDetector(comic_detector=comic_det)
         return _hybrid_detector
-    else:
-        if _contour_detector is None:
-            _contour_detector = ContourBubbleDetector()
-        return _contour_detector
+    raise ValueError("GPU-only backend does not support the CPU contour detector.")
 
 
 @router.post("/page", response_model=DetectBubblesResponse)
@@ -57,7 +55,7 @@ async def translate_manga_page(
         "id",
         description="Target translation language code ('id' for Indonesian, 'en' for English)"
     ),
-    detector_type: Literal["hybrid", "comic_text_detector", "contour"] = Form(
+    detector_type: Literal["hybrid", "comic_text_detector"] = Form(
         "hybrid",
         description="Text/bubble detector engine ('hybrid' recommended for optimal accuracy)"
     ),
@@ -65,9 +63,9 @@ async def translate_manga_page(
         "rtl",
         description="Reading direction ('rtl' for Japanese Manga, 'ltr' for Manhwa)"
     ),
-    device: Literal["auto", "gpu", "cpu"] = Form(
-        "auto",
-        description="Compute device for detection and OCR: 'gpu' (DirectML), 'cpu', or 'auto'"
+    device: Literal["gpu"] = Form(
+        "gpu",
+        description="GPU-only backend; the only accepted value is 'gpu'"
     )
 ):
     """
@@ -149,7 +147,7 @@ async def inpaint_and_translate_manga_page(
         "llm",
         description="Translation engine: 'llm' (OpenAI/Ollama) or 'google' (Google Translate)"
     ),
-    detector_type: Literal["hybrid", "comic_text_detector", "contour"] = Form(
+    detector_type: Literal["hybrid", "comic_text_detector"] = Form(
         "hybrid",
         description="Text/bubble detector engine ('hybrid' recommended)"
     ),
@@ -157,9 +155,9 @@ async def inpaint_and_translate_manga_page(
         "rtl",
         description="Reading direction ('rtl' for Japanese Manga, 'ltr' for Manhwa)"
     ),
-    device: Literal["auto", "gpu", "cpu"] = Form(
-        "auto",
-        description="Compute device for detection and OCR: 'gpu' (DirectML), 'cpu', or 'auto'"
+    device: Literal["gpu"] = Form(
+        "gpu",
+        description="GPU-only backend; the only accepted value is 'gpu'"
     ),
     typeset: bool = Form(
         True,
@@ -200,11 +198,8 @@ async def inpaint_and_translate_manga_page(
     if detector_type in ("hybrid", "comic_text_detector"):
         comic_det = getattr(detector, "comic_detector", detector)
         if hasattr(comic_det, "detect_raw") and hasattr(comic_det, "get_unletterboxed_seg"):
-            try:
-                blk, seg, det, r, (dw, dh) = comic_det.detect_raw(image)
-                seg_mask = comic_det.get_unletterboxed_seg(seg, image.width, image.height, dw, dh)
-            except Exception:
-                seg_mask = None
+            blk, seg, det, r, (dw, dh) = comic_det.detect_raw(image)
+            seg_mask = comic_det.get_unletterboxed_seg(seg, image.width, image.height, dw, dh)
 
     if typeset and ordered_bubbles:
         ocr_service = get_ocr_service(device=device)
@@ -268,7 +263,7 @@ async def inpaint_stream_manga_page(
         "llm",
         description="Translation engine: 'llm' (OpenAI/Ollama) or 'google' (Google Translate)"
     ),
-    detector_type: Literal["hybrid", "comic_text_detector", "contour"] = Form(
+    detector_type: Literal["hybrid", "comic_text_detector"] = Form(
         "hybrid",
         description="Text/bubble detector engine ('hybrid' recommended)"
     ),
@@ -276,9 +271,9 @@ async def inpaint_stream_manga_page(
         "rtl",
         description="Reading direction ('rtl' for Japanese Manga, 'ltr' for Manhwa)"
     ),
-    device: Literal["auto", "gpu", "cpu"] = Form(
-        "auto",
-        description="Compute device for detection and OCR: 'gpu' (DirectML), 'cpu', or 'auto'"
+    device: Literal["gpu"] = Form(
+        "gpu",
+        description="GPU-only backend; the only accepted value is 'gpu'"
     ),
     typeset: bool = Form(
         True,
@@ -313,11 +308,8 @@ async def inpaint_stream_manga_page(
             if detector_type in ("hybrid", "comic_text_detector"):
                 comic_det = getattr(detector, "comic_detector", detector)
                 if hasattr(comic_det, "detect_raw") and hasattr(comic_det, "get_unletterboxed_seg"):
-                    try:
-                        blk, seg, det, r, (dw, dh) = comic_det.detect_raw(image)
-                        seg_mask = comic_det.get_unletterboxed_seg(seg, image.width, image.height, dw, dh)
-                    except Exception:
-                        seg_mask = None
+                    blk, seg, det, r, (dw, dh) = comic_det.detect_raw(image)
+                    seg_mask = comic_det.get_unletterboxed_seg(seg, image.width, image.height, dw, dh)
 
             if typeset and ordered_bubbles:
                 yield json.dumps({
@@ -384,4 +376,3 @@ async def inpaint_stream_manga_page(
             yield json.dumps({"stage": "error", "message": str(e)}) + "\n"
 
     return StreamingResponse(stream_generator(), media_type="application/x-ndjson")
-

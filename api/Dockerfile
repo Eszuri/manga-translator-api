@@ -29,10 +29,3 @@ COPY --chown=translator:translator docker-entrypoint.py ./docker-entrypoint.py
 USER translator
 EXPOSE 8000
 CMD ["python", "docker-entrypoint.py"]
-
-FROM base AS cpu
-COPY --chown=translator:translator app ./app
-COPY --chown=translator:translator docker-entrypoint.py ./docker-entrypoint.py
-USER translator
-EXPOSE 8000
-CMD ["python", "docker-entrypoint.py"]
