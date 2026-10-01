@@ -8,9 +8,9 @@
 **/models/
 .env
 
-# Local manga samples and generated pipeline output
-api/test-data/manga-pages/
-api/test-data/builds/
+# Local manga source images and generated build output
+api/Images/original Images/
+api/Images/build Images/
 
 # Build artifacts
 dist/

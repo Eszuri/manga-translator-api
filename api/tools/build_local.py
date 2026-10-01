@@ -1,4 +1,4 @@
-"""Build local visual output from manga pages in ``test-data``.
+"""Build local visual output from manga pages in ``Images/original Images``.
 
 This manual local builder uses the same Google translation implementation as
 the API and writes inspectable output for every pipeline stage.
@@ -6,16 +6,14 @@ the API and writes inspectable output for every pipeline stage.
 
 import argparse
 import asyncio
-import json
 import os
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont
 
 from app.services.comic_text_detector import ComicTextDetector
 from app.services.detector import (
@@ -31,21 +29,21 @@ from app.services.typesetting_service import MangaTypesettingService
 
 
 API_DIR = Path(__file__).resolve().parents[1]
-STAGES = (
-    "01_box",
-    "02_text_box",
-    "03_ocr",
-    "04_translate",
-    "05_inpainting",
-    "06_render",
-)
+STAGE_FOLDERS = {
+    "box": "Box",
+    "text_box": "Text Box",
+    "ocr": "OCR",
+    "translate": "translate",
+    "inpainting": "inpainting",
+    "render": "render",
+}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Build local manga output from test-data images")
-    parser.add_argument("--dir", type=Path, default=Path("test-data/manga-pages"))
-    parser.add_argument("--output-root", type=Path, default=Path("test-data/builds"))
+    parser = argparse.ArgumentParser(description="Build local manga output from original images")
+    parser.add_argument("--dir", type=Path, default=Path("Images/original Images"))
+    parser.add_argument("--output-root", type=Path, default=Path("Images/build Images"))
     parser.add_argument("--image", help="One input filename, e.g. 009.jpg")
     parser.add_argument("--limit", type=int, default=0, help="Pages to process; 0 means all")
     parser.add_argument("--device", choices=("gpu",), default="gpu")
@@ -64,8 +62,7 @@ def select_images(directory: Path, name: str | None, limit: int) -> list[Path]:
     if not directory.is_dir():
         raise FileNotFoundError(f"Input directory not found: {directory}")
     images = sorted(p for p in directory.iterdir()
-                    if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
-                    and (name or (p.stem.isdecimal() and len(p.stem) == 3)))
+                    if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
     if name:
         images = [p for p in images if p.name.lower() == name.lower()]
         if not images:
@@ -92,10 +89,6 @@ def get_segmentation(detector, image: Image.Image):
     if hasattr(comic_detector, "get_cached_segmentation"):
         return comic_detector.get_cached_segmentation(image)
     return None
-
-
-def write_json(path: Path, data):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_font(size: int):
@@ -157,47 +150,36 @@ def transcript_image(image: Image.Image, bubbles, title: str, translated: bool) 
     return canvas
 
 
-def contact_sheet(stage_images: list[Path], output: Path):
-    tile_w, tile_h = 540, 740
-    sheet = Image.new("RGB", (tile_w * 3, tile_h * 2), (230, 230, 230))
-    draw = ImageDraw.Draw(sheet)
-    font = load_font(22)
-    for index, path in enumerate(stage_images):
-        x, y = (index % 3) * tile_w, (index // 3) * tile_h
-        draw.rectangle((x, y, x + tile_w - 1, y + tile_h - 1), outline=(110, 110, 110))
-        draw.text((x + 12, y + 10), STAGES[index].replace("_", " "), font=font, fill="black")
-        with Image.open(path) as stage:
-            preview = ImageOps.contain(stage.convert("RGB"), (tile_w - 24, tile_h - 58))
-            sheet.paste(preview, (x + (tile_w - preview.width) // 2, y + 48))
-    sheet.save(output, format="JPEG", quality=90)
+def create_stage_outputs(output_root: Path, stem: str) -> dict[str, Path]:
+    """Create stage folders once and return stable image paths for one page."""
+    return {
+        stage: output_root / folder / f"{stem}.png"
+        for stage, folder in STAGE_FOLDERS.items()
+    }
 
 
-def process_page(path: Path, run_dir: Path, detector, ocr, translator,
+def process_page(path: Path, output_root: Path, detector, ocr, translator,
                  inpainter, typesetter, args) -> dict:
     timings = {}
     stem = path.stem
     with Image.open(path) as original:
         image = original.convert("RGB")
-    steps_dir = run_dir / "steps"
-    outputs = {stage: steps_dir / f"{stem}_{stage}.png" for stage in STAGES}
+    outputs = create_stage_outputs(output_root, stem)
 
     start = time.perf_counter()
     bubbles = sort_manga_reading_order(detector.detect(image), reading_direction="rtl")
     timings["box_ms"] = round((time.perf_counter() - start) * 1000)
-    annotate_and_save_bubbles(image, bubbles, str(outputs["01_box"]), draw_text_boxes=False)
-    write_json(steps_dir / f"{stem}_01_box.json", [b.model_dump() for b in bubbles])
+    annotate_and_save_bubbles(image, bubbles, str(outputs["box"]), draw_text_boxes=False)
 
     start = time.perf_counter()
     segmentation = get_segmentation(detector, image)
-    annotate_and_save_bubbles(image, bubbles, str(outputs["02_text_box"]), draw_layout=True)
+    annotate_and_save_bubbles(image, bubbles, str(outputs["text_box"]), draw_layout=True)
     timings["text_box_ms"] = round((time.perf_counter() - start) * 1000)
-    write_json(steps_dir / f"{stem}_02_text_box.json", [b.model_dump() for b in bubbles])
 
     start = time.perf_counter()
     ocr.recognize_all_bubbles(image, bubbles, padding=6)
     timings["ocr_ms"] = round((time.perf_counter() - start) * 1000)
-    transcript_image(image, bubbles, "OCR - Japanese text", False).save(outputs["03_ocr"])
-    write_json(steps_dir / f"{stem}_03_ocr.json", [b.model_dump() for b in bubbles])
+    transcript_image(image, bubbles, "OCR - Japanese text", False).save(outputs["ocr"])
 
     start = time.perf_counter()
     candidates = [b for b in bubbles if (b.text or "").strip() and not is_graphic_text(b.text)]
@@ -206,20 +188,18 @@ def process_page(path: Path, run_dir: Path, detector, ocr, translator,
             candidates, target_lang=args.target_lang, translator="google"
         ))
     timings["translate_ms"] = round((time.perf_counter() - start) * 1000)
-    transcript_image(image, bubbles, f"Google Translate - {args.target_lang}", True).save(outputs["04_translate"])
-    write_json(steps_dir / f"{stem}_04_translate.json", [b.model_dump() for b in bubbles])
+    transcript_image(image, bubbles, f"Google Translate - {args.target_lang}", True).save(outputs["translate"])
 
     active = [b for b in candidates if usable_translation(b.translation or "")]
     start = time.perf_counter()
     cleaned = inpainter.inpaint(image, seg_mask=segmentation, bubbles=active)
     timings["inpainting_ms"] = round((time.perf_counter() - start) * 1000)
-    cleaned.convert("RGB").save(outputs["05_inpainting"])
+    cleaned.convert("RGB").save(outputs["inpainting"])
 
     start = time.perf_counter()
     rendered = typesetter.typeset(cleaned, active, font_scale=args.font_scale) if active else cleaned
     timings["render_ms"] = round((time.perf_counter() - start) * 1000)
-    rendered.convert("RGB").save(outputs["06_render"])
-    contact_sheet(list(outputs.values()), run_dir / "all_in_one" / f"{stem}.jpg")
+    rendered.convert("RGB").save(outputs["render"])
     return {"image": path.name, "status": "ok", "detected": len(bubbles),
             "translated": len(active), "timings": timings}
 
@@ -227,13 +207,12 @@ def process_page(path: Path, run_dir: Path, detector, ocr, translator,
 def main() -> int:
     args = parse_args()
     images = select_images(resolve_from_api(args.dir), args.image, args.limit)
-    root = resolve_from_api(args.output_root)
-    run_dir = root / datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
-    for folder in ("steps", "all_in_one"):
-        (run_dir / folder).mkdir(parents=True, exist_ok=False)
+    output_root = resolve_from_api(args.output_root)
+    for folder in STAGE_FOLDERS.values():
+        (output_root / folder).mkdir(parents=True, exist_ok=True)
 
     print(f"Pages: {len(images)} | device: {args.device} | translation: Google")
-    print(f"Output: {run_dir}")
+    print(f"Output: {output_root}")
     detector = make_detector(args.detector, args.device)
     ocr = MangaOcrService(device="gpu")
     translator = get_translation_service()
@@ -244,17 +223,15 @@ def main() -> int:
     for index, path in enumerate(images, 1):
         print(f"[{index}/{len(images)}] {path.name}", flush=True)
         try:
-            result = process_page(path, run_dir, detector, ocr, translator,
+            result = process_page(path, output_root, detector, ocr, translator,
                                   inpainter, typesetter, args)
             print(f"    box={result['detected']} rendered={result['translated']}", flush=True)
         except Exception as exc:
             result = {"image": path.name, "status": "failed", "error": str(exc)}
             print(f"    FAILED: {exc}", file=sys.stderr, flush=True)
         results.append(result)
-        write_json(run_dir / "manifest.json", {"provider": "google", "pages": results})
-
     failures = sum(item["status"] != "ok" for item in results)
-    print(f"Complete: {len(images) - failures}/{len(images)} pages; output: {run_dir}")
+    print(f"Complete: {len(images) - failures}/{len(images)} pages; output: {output_root}")
     return 1 if failures else 0
 
 

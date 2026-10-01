@@ -1,31 +1,12 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.11-slim-bookworm AS base
+# The GPU runtime is built independently by Dockerfile.runtime. Rebuilding this
+# image after a source-code change copies only app/ and tools/.
+FROM manga-translator-runtime:gpu AS gpu
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    HF_HOME=/home/translator/.cache/huggingface
 WORKDIR /app
+COPY --link --chown=10001:10001 app ./app
+COPY --link --chown=10001:10001 tools ./tools
 
-RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd --gid 10001 translator \
-    && useradd --uid 10001 --gid translator --create-home translator
-
-COPY requirements ./requirements
-RUN python -m pip install --no-cache-dir -r requirements/docker.txt
-RUN mkdir -p /home/translator/.cache/huggingface \
-    && chown -R translator:translator /home/translator/.cache
-
-FROM base AS gpu-runtime
-USER root
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip cache purge \
-    && python -m pip uninstall -y onnxruntime \
-    && python -m pip install --default-timeout=1800 --retries=10 "onnxruntime-gpu[cuda,cudnn]==1.26.0"
-
-FROM gpu-runtime AS gpu
-COPY --chown=translator:translator app ./app
-COPY --chown=translator:translator tools ./tools
 USER translator
 EXPOSE 8000
 CMD ["python", "-m", "tools.run_container"]

@@ -13,16 +13,9 @@ if errorlevel 1 (
     goto :finish
 )
 
-docker image inspect manga-translator-runtime:gpu >nul 2>&1 || docker compose -f compose.runtime.yaml build runtime
-if errorlevel 1 (
-    set "DOCKER_EXIT_CODE=1"
-    popd
-    goto :finish
-)
-
-docker compose -f compose.yaml up -d --build --wait --wait-timeout 180
+docker compose -f compose.runtime.yaml build runtime
 set "DOCKER_EXIT_CODE=%ERRORLEVEL%"
-if "%DOCKER_EXIT_CODE%"=="0" echo [SUCCESS] Docker deployment API is running.
+if "%DOCKER_EXIT_CODE%"=="0" echo [SUCCESS] GPU runtime image is ready.
 popd
 :finish
 pause

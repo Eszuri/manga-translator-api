@@ -1,11 +1,11 @@
 """Start the GPU-only API inside its Docker container."""
-import os
 from pathlib import Path
 import sys
 
 import uvicorn
 
 from app.core.gpu import required_gpu_provider
+from app.core.config import settings
 
 
 if __name__ == "__main__":
@@ -33,14 +33,14 @@ if __name__ == "__main__":
         sys.exit(1)
     print(f"Strict GPU inference enabled with {provider}")
 
-    reload_enabled = os.getenv("API_RELOAD", "False").lower() in ("true", "1", "yes")
+    reload_enabled = settings.RELOAD
 
     # A single process avoids duplicating ONNX models and their memory usage.
     # Development can enable reload while production keeps an immutable process.
     uvicorn.run(
         "app.main:app",
-        host=os.getenv("API_HOST", "0.0.0.0"),
-        port=int(os.getenv("API_PORT", "8000")),
+        host=settings.HOST,
+        port=settings.PORT,
         workers=1,
         reload=reload_enabled,
         reload_dirs=["/app/app"] if reload_enabled else None,

@@ -21,6 +21,14 @@ async function getSettings() {
   });
 }
 
+function formatApiError(detail, status) {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail.map(item => `${(item.loc || []).join('.')}: ${item.msg || 'Invalid value'}`).join('; ');
+  }
+  return `HTTP error ${status}`;
+}
+
 async function apiRequest(endpoint, options = {}) {
   const settings = await getSettings();
   const url = `${settings.apiUrl.replace(/\/$/, '')}${endpoint}`;
@@ -38,7 +46,7 @@ async function apiRequest(endpoint, options = {}) {
       let errorMsg = `HTTP error ${res.status}`;
       try {
         const errJson = await res.json();
-        if (errJson.detail) errorMsg = errJson.detail;
+        if (errJson.detail) errorMsg = formatApiError(errJson.detail, res.status);
       } catch (e) {}
       return { success: false, error: errorMsg };
     }
@@ -157,7 +165,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             let errorMsg = `HTTP error ${res.status}`;
             try {
               const err = await res.json();
-              if (err.detail) errorMsg = err.detail;
+              if (err.detail) errorMsg = formatApiError(err.detail, res.status);
             } catch (e) {}
             sendResponse({ success: false, error: errorMsg });
             return;
@@ -215,7 +223,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           }
         } catch (fetchErr) {
           if (fetchErr.name === 'AbortError') {
-            sendResponse({ success: false, error: 'Request timeout (server sibuk).' });
+            sendResponse({ success: false, error: 'Request timed out (server may be busy).' });
           } else {
             sendResponse({ success: false, error: fetchErr.message });
           }
@@ -298,11 +306,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const settings = await getSettings();
       
       const imgRes = await fetch(info.srcUrl);
+      if (!imgRes.ok) throw new Error(`Image request failed with HTTP ${imgRes.status}`);
       const imgBlob = await imgRes.blob();
+      if (!imgBlob.type.startsWith('image/')) throw new Error('The image response is not an image.');
       
       const formData = new FormData();
       formData.append('file', imgBlob, 'image.jpg');
       formData.append('target_lang', settings.targetLang);
+      formData.append('translator', settings.translator);
       formData.append(
         'detector_type',
         settings.detectorType === 'comic_text_detector' ? 'comic_text_detector' : 'hybrid'

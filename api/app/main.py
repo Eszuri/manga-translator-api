@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.gpu import required_gpu_provider
 from app.api.v1.router import api_router
+from app.services.translation_service import TranslationError
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +47,23 @@ app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 @app.exception_handler(RequestValidationError)
 async def request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Log rejected form fields without logging uploaded image data."""
+    errors = [
+        {key: value for key, value in error.items() if key in ("type", "loc", "msg")}
+        for error in exc.errors()
+    ]
     logger.warning(
         "Request validation rejected %s %s: %s",
         request.method,
         request.url.path,
-        exc.errors(),
+        errors,
     )
-    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
+
+
+@app.exception_handler(TranslationError)
+async def translation_error(request: Request, exc: TranslationError) -> JSONResponse:
+    logger.warning("Translation failed on %s: %s", request.url.path, exc)
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
 
 
 @app.get("/")

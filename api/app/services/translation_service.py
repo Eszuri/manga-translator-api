@@ -2,6 +2,7 @@ import asyncio
 import re
 import json
 import logging
+from urllib.parse import urlsplit
 from typing import Dict, List, Optional, Tuple, Any
 import httpx
 
@@ -9,6 +10,10 @@ from app.core.config import settings
 from app.schemas import DetectedBubble
 
 logger = logging.getLogger(__name__)
+
+
+class TranslationError(RuntimeError):
+    """A translation failure that must not be rendered over source dialogue."""
 
 
 def extract_json_from_text(text: str) -> Optional[dict]:
@@ -66,7 +71,9 @@ class MangaTranslationService:
         """Returns True if a real API key is configured (or if using a local provider like Ollama)."""
         if not self.api_key or self.api_key.lower() in ("your_api_key_here", "none", ""):
             # If pointing to localhost/ollama, api_key is optional
-            return "localhost" in self.base_url or "127.0.0.1" in self.base_url
+            return urlsplit(self.base_url).hostname in (
+                "localhost", "127.0.0.1", "::1", "host.docker.internal"
+            )
         return True
 
     def _build_system_prompt(self, target_lang: str) -> str:
@@ -100,22 +107,6 @@ class MangaTranslationService:
             lines.append(f"[Bubble #{b_id}]: {text}")
         return "\n".join(lines)
 
-
-    def _generate_fallback_translations(
-        self,
-        bubbles_data: List[Dict[str, Any]],
-        reason: str
-    ) -> Dict[int, str]:
-        """Provides informative fallback translations when API call is not available."""
-        result = {}
-        for item in bubbles_data:
-            b_id = item["id"]
-            orig = item.get("text", "")
-            if not orig:
-                result[b_id] = ""
-            else:
-                result[b_id] = f"[{reason}]"
-        return result
 
     async def _call_google_async(
         self,
@@ -275,11 +266,7 @@ class MangaTranslationService:
     ) -> Dict[int, str]:
         """Asynchronous HTTP call to the OpenAI-compatible endpoint."""
         if not self.is_configured():
-            logger.warning("LLM API Key is not configured. Returning placeholder message.")
-            return self._generate_fallback_translations(
-                dialogue_items,
-                "No API Key: Set LLM_API_KEY in .env"
-            )
+            raise TranslationError("LLM is not configured. Set LLM_API_KEY and LLM_BASE_URL in api/.env.")
 
         url = f"{self.base_url}/chat/completions"
         headers = {
@@ -300,36 +287,28 @@ class MangaTranslationService:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 response = await client.post(url, headers=headers, json=payload)
 
-            if response.status_code == 401:
-                logger.error("LLM API returned 401 Unauthorized: Invalid API key.")
-                return self._generate_fallback_translations(dialogue_items, "Error: Invalid API Key")
-            elif response.status_code == 429:
-                logger.warning("LLM API returned 429 Rate Limit / Quota Exceeded.")
-                return self._generate_fallback_translations(dialogue_items, "Error: Rate Limit Exceeded")
-            elif response.status_code != 200:
-                logger.error(f"LLM API returned status {response.status_code}: {response.text[:200]}")
-                return self._generate_fallback_translations(dialogue_items, f"Error: HTTP {response.status_code}")
+            if response.status_code != 200:
+                raise TranslationError(f"LLM translation failed (HTTP {response.status_code}). Check the model, endpoint, API key, or quota.")
 
             data = response.json()
             raw_content = data["choices"][0]["message"]["content"]
             return self._parse_llm_response(raw_content, dialogue_items)
 
+        except TranslationError:
+            raise
         except httpx.ConnectError as e:
-            logger.error(f"Failed to connect to LLM endpoint at {self.base_url}: {e}")
-            return self._generate_fallback_translations(dialogue_items, "Error: Connection Failed")
+            raise TranslationError("Cannot connect to the LLM endpoint. Check LLM_BASE_URL_LOCAL/DOCKER and whether the server is running.") from e
         except httpx.TimeoutException as e:
-            logger.error(f"LLM request timed out ({self.timeout_seconds}s): {e}")
-            return self._generate_fallback_translations(dialogue_items, "Error: Request Timeout")
+            raise TranslationError(f"LLM request timed out after {self.timeout_seconds}s.") from e
         except Exception as e:
-            logger.error(f"Unexpected error during translation: {e}")
-            return self._generate_fallback_translations(dialogue_items, f"Error: {type(e).__name__}")
+            raise TranslationError(f"Invalid LLM translation response: {type(e).__name__}.") from e
 
     def _parse_llm_response(
         self,
         raw_content: str,
         dialogue_items: List[Dict[str, Any]]
     ) -> Dict[int, str]:
-        """Parses LLM JSON output and falls back cleanly if output format is irregular."""
+        """Require complete LLM output before any original text is erased."""
         parsed = extract_json_from_text(raw_content)
         result: Dict[int, str] = {}
 
@@ -338,7 +317,9 @@ class MangaTranslationService:
             if isinstance(translations_list, list):
                 for item in translations_list:
                     if isinstance(item, dict) and "id" in item and "translation" in item:
-                        result[int(item["id"])] = str(item["translation"]).strip()
+                        if not isinstance(item["translation"], str):
+                            raise TranslationError("LLM translation values must be text.")
+                        result[int(item["id"])] = item["translation"].strip()
             elif isinstance(parsed, dict):
                 for k, v in parsed.items():
                     if str(k).isdigit() and isinstance(v, str):
@@ -347,10 +328,7 @@ class MangaTranslationService:
         for item in dialogue_items:
             b_id = item["id"]
             if b_id not in result or not result[b_id]:
-                if len(dialogue_items) == 1 and not result:
-                    result[b_id] = raw_content.strip()
-                else:
-                    result[b_id] = item.get("text", "")
+                raise TranslationError(f"LLM did not return a valid translation for bubble {b_id}.")
 
         return result
 

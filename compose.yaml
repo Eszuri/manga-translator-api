@@ -17,6 +17,8 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: "8000"
       API_DEBUG: "False"
+      API_RELOAD: "False"
+      API_CONTAINER: "True"
       GPU_PROVIDER: CUDAExecutionProvider
       HF_HOME: /home/translator/.cache/huggingface
     ports:
@@ -33,20 +35,13 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5).read()"]
       interval: 30s
       timeout: 10s
-      start_period: 30s
+      start_period: 90s
       retries: 3
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
 
 volumes:
   huggingface-cache:
