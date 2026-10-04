@@ -72,7 +72,7 @@ class MangaTranslationService:
         if not self.api_key or self.api_key.lower() in ("your_api_key_here", "none", ""):
             # If pointing to localhost/ollama, api_key is optional
             return urlsplit(self.base_url).hostname in (
-                "localhost", "127.0.0.1", "::1", "host.docker.internal"
+                "localhost", "127.0.0.1", "::1"
             )
         return True
 

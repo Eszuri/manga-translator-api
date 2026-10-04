@@ -22,8 +22,7 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 
 def llm_base_url() -> str:
-    mode = "DOCKER" if env_bool("API_CONTAINER") else "LOCAL"
-    value = os.getenv(f"LLM_BASE_URL_{mode}") or os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
+    value = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
     value = value.strip().rstrip("/")
     parsed = urlsplit(value)
     if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment:

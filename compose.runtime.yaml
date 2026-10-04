@@ -1,8 +1,0 @@
-name: manga-translator
-
-services:
-  runtime:
-    build:
-      context: ./api
-      dockerfile: Dockerfile.runtime
-    image: manga-translator-runtime:gpu

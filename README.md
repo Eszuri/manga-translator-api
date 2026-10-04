@@ -15,27 +15,22 @@ api/
     assets/fonts/        Font untuk hasil render
     models/              Model lokal
   tools/                 Runner server dan builder gambar
-  requirements/          Dependency global, lokal, dan Docker
+  requirements/          Dependency server lokal dan GUI
+  server_gui/            Antarmuka kontrol server Windows
   Images/
     original Images/     Gambar manga asli
     build Images/        Hasil build manga translator
   .env.example           sample environment
   .env                   konfigurasi API, dan kawan kawan
-  Dockerfile             Image aplikasi
-  Dockerfile.runtime     Image dependency GPU
 extension/               Source extension browser
 assets/branding/         icon extension
 docs/                    Dokumentasi
 scripts/
   tasks/                 Builder package extension
   windows/
-    common/              Pemeriksaan Docker Engine
     build/               Shortcut build gambar dan extension
-    run/                 Shortcut server lokal dan Docker
-compose.yaml             Deployment GPU
-compose.dev.yaml         Override development dengan auto-reload
-compose.runtime.yaml     Build runtime GPU
-dist/                    ZIP, CRX, dan kunci extension
+    run/                 Shortcut server lokal dan GUI
+dist/                    Paket server dan extension
 ```
 
 ## Shortcut Windows
@@ -46,38 +41,28 @@ dist/                    ZIP, CRX, dan kunci extension
 | Build gambar lokal | `scripts\windows\build\local-images.bat` |
 | Build extension | `scripts\windows\build\package-extension.bat` |
 | Server lokal Windows | `scripts\windows\run\local-server.bat` |
-| Docker development (tanpa build, auto-reload) | `scripts\windows\run\docker-development.bat` |
-| Build aplikasi dan jalankan Docker development | `scripts\windows\run\docker-development-rebuild.bat` |
-| Build runtime GPU Docker | `scripts\windows\run\docker-runtime-rebuild.bat` |
-| Build aplikasi dan jalankan Docker deployment | `scripts\windows\run\docker-deployment.bat` |
-| Hentikan dan hapus container project | `scripts\windows\run\docker-stop.bat` |
+| GUI server dari source | `scripts\windows\run\local-server-gui.bat` |
+| Build paket GUI server | `scripts\windows\build\package-server-gui.bat` |
 
 ## Menjalankan backend
 
-Siapkan `api/.env` dan model terlebih dahulu. Tanpa Docker, setelah environment
-`.venv-gpu` tersedia:
+Siapkan `api/.env`, model, dan environment `.venv-gpu` terlebih dahulu. Jalankan
+server dari terminal:
 
 ```powershell
 scripts\windows\run\local-server.bat
 ```
 
-Dengan Docker, untuk instalasi pertama atau build aplikasi:
-
-```powershell
-scripts\windows\run\docker-development-rebuild.bat
-```
-
-Script tersebut membangun runtime hanya jika image runtime belum tersedia.
-Jika dependency runtime berubah, build ulang runtime secara terpisah.
+Untuk kontrol melalui GUI, jalankan `scripts\windows\run\local-server-gui.bat`,
+lalu tekan **Start server**. GUI tidak menyalakan server secara otomatis.
 
 Periksa API:
 
 ```powershell
-/api/v1/health
+http://127.0.0.1:8000/api/v1/health
 ```
 
-Dokumentasi endpoint tersedia di `/docs`.
-Server lokal dan Docker tidak dapat memakai port host yang sama secara bersamaan.
+Dokumentasi endpoint tersedia di `http://127.0.0.1:8000/docs`.
 
 ## Memasang extension
 
@@ -111,7 +96,7 @@ CRX terbuild jika browser Chromium (google chrome,dkk) ditemukan.
 
 ## pemrosesan GPU
 
-Inferensi model deteksi dan OCR wajib memakai CUDA pada Docker atau DirectML pada Windows lokal.
+Inferensi model deteksi dan OCR wajib memakai DirectML pada Windows lokal.
 
 pipeline yg tidak berjalan di GPU: decoding gambar, pengolahan mask,
 inpainting OpenCV Telea, penataan teks, dan beberapa node kontrol/shape ONNX
@@ -158,9 +143,7 @@ Edit `api/.env`:
 | `API_PORT` | Port server lokal, default `8000` |
 | `API_RELOAD` | `True` agar server lokal restart otomatis saat kode berubah |
 | `LLM_API_KEY` | Kunci layanan LLM; Google Translate tidak memerlukannya |
-| `LLM_BASE_URL` | Alamat utama layanan LLM. Dipakai jika alamat khusus lokal atau Docker tidak diisi |
-| `LLM_BASE_URL_LOCAL` | Alamat layanan LLM saat backend dijalankan tanpa Docker. Jika diisi, alamat ini dipakai sebagai pengganti `LLM_BASE_URL` |
-| `LLM_BASE_URL_DOCKER` | Alamat layanan LLM saat backend dijalankan dengan Docker. Jika diisi, alamat ini dipakai sebagai pengganti `LLM_BASE_URL` |
+| `LLM_BASE_URL` | Alamat layanan LLM, misalnya `http://127.0.0.1:11434/v1` untuk Ollama pada PC yang sama |
 | `LLM_MODEL` | ID model yang tersedia pada layanan |
 
 
@@ -169,19 +152,12 @@ Contoh Ollama pada PC:
 
 ```dotenv
 LLM_API_KEY=
-LLM_BASE_URL_LOCAL=http://127.0.0.1:11434/v1
-LLM_BASE_URL_DOCKER=http://host.docker.internal:11434/v1
-LLM_MODEL=model-yang-sudah-tersedia (contoh= qwen2.5:3b)
+LLM_BASE_URL=http://127.0.0.1:11434/v1
+LLM_MODEL=qwen2.5:3b
 ```
 
-Dalam contoh ini, backend lokal mengakses Ollama melalui `127.0.0.1`.
-Backend Docker mengakses Ollama pada PC yang sama melalui `host.docker.internal`.
-
-- Backend lokal memakai `LLM_BASE_URL_LOCAL`; 
-  Docker memakai `LLM_BASE_URL_DOCKER`.
-  Jika alamat tersebut kosong, backend memakai `LLM_BASE_URL`.
-- Kosongkan `LLM_BASE_URL_LOCAL` dan `LLM_BASE_URL_DOCKER` jika keduanya tidak digunakan.
-- Kunci boleh kosong untuk host lokal yang dikenali backend, termasuk `host.docker.internal`.
+Backend mengakses Ollama pada PC yang sama melalui `127.0.0.1`.
+Kunci API boleh kosong untuk layanan pada `localhost`, `127.0.0.1`, atau `::1`.
 
 ### Akses dari perangkat lain
 
@@ -198,27 +174,23 @@ Pastikan firewall PC mengizinkan koneksi ke port API.
 
 ## Setelah mengubah kode atau pengaturan konfigurasi
 
-- Development Docker: perubahan `api/app` langsung reload.
-- Deployment: jalankan kembali `docker-deployment.bat` setelah mengubah kode.
-- Dependency Docker berubah: build runtime, lalu build aplikasi.
-- `.env` berubah: restart server lokal. jika di Docker, buat ulang container:
+- Server lokal: perubahan kode otomatis diterapkan jika `API_RELOAD=True`; setelah `.env` berubah, restart server.
+- Paket GUI: setelah kode atau dependency berubah, build ulang paket. Setelah pengaturan GUI berubah, restart server melalui GUI.
 
 
 ## Jika terjadi error
 
-Untuk Docker, baca log dengan `docker compose -f compose.yaml logs --tail 100 api`.
-Untuk server lokal, baca pesan pada terminal tempat server dijalankan.
+Untuk server lokal, baca pesan pada terminal. Untuk GUI, buka tab **Logs**.
 
 
 | Pesan yang muncul | Arti dan tindakan |
 | --- | --- |
-| `Docker Engine did not respond within 15 seconds` | Pemeriksaan Docker Engine melewati batas 15 detik. Jalankan `docker info` untuk melihat error koneksinya.
-| `Required GPU provider ... is unavailable` atau `GPU-only backend requires ...` | Provider GPU yang dibutuhkan tidak tersedia. Daftarnya ditampilkan setelah `Available providers`. Lokal memerlukan `DmlExecutionProvider` Docker memerlukan `CUDAExecutionProvider` |
+| `Required GPU provider ... is unavailable` atau `GPU-only backend requires ...` | Provider GPU yang dibutuhkan tidak tersedia. Periksa `Available providers`; server Windows memerlukan `DmlExecutionProvider` |
 | `failed to activate ... Active providers: ...` | Sesi model gagal mengaktifkan provider GPU yang diminta. Baca error pemuatan ONNX sebelumnya pada log.|
-| `Missing model files ...` | File yang disebut setelah pesan ini tidak ditemukan pada folder model container. Cocokkan daftar tersebut dengan file di `api/app/models` |
+| `Missing model files ...` | File yang disebut setelah pesan ini tidak ditemukan pada folder model yang dipilih. Cocokkan daftar tersebut dengan file di `api/app/models` atau folder pada pengaturan GUI |
 | HTTP `422` | API menolak parameter. `detail.loc` menunjukkan parameter yang salah dan `detail.msg` menjelaskan alasannya. Contoh: `body.file: Field required` berarti file tidak terkirim; `body.device: Input should be 'gpu'` berarti nilai perangkat ditolak |
 | `LLM is not configured` | Pemeriksaan konfigurasi LLM gagal. Untuk layanan yang membutuhkan kunci, isi `LLM_API_KEY`. atau isi .env ada yg salah|
-| `Cannot connect to the LLM endpoint` | Backend gagal membuat koneksi ke layanan LLM. Uji alamat yang benar-benar dipakai: `LLM_BASE_URL_LOCAL`, `LLM_BASE_URL_DOCKER`, atau `LLM_BASE_URL` jika alamat khusus kosong |
+| `Cannot connect to the LLM endpoint` | Backend gagal membuat koneksi ke layanan LLM. Periksa `LLM_BASE_URL` dan pastikan layanan LLM berjalan |
 | `LLM request timed out after ...s` | Panggilan LLM melewati batas waktu yang diatur oleh `LLM_TIMEOUT_SECONDS`. Ini berbeda dari timeout extension |
 | `LLM did not return a valid translation for bubble ...` | Hasil LLM tidak memuat terjemahan yang tidak kosong untuk ID dialog tersebut. Respons harus berisi ID dan teks terjemahan untuk setiap dialog atau kemungkinan menggunakan gambar yg bukan bahasa jepang|
 | `Google Translate failed (HTTP 429)` | Google membatasi permintaan. Ini bukan error API key LLM |
@@ -236,13 +208,13 @@ Pada respons stream, `stage=error` berarti proses gagal meskipun HTTP tetap 200.
 - Build paket Windows: `scripts\windows\build\package-server-gui.bat`.
 - Hasil: `dist/MangaTranslatorServer/MangaTranslatorServer.exe`. Folder `_internal` harus tetap berada di sebelah executable.
 
-Paket menyertakan Python dan dependency server; tidak membutuhkan instalasi Python atau Docker pada PC tujuan.
+Paket menyertakan Python dan dependency server; PC tujuan tidak perlu memasang Python secara terpisah.
 Model ONNX, gambar, `.env`, dan kunci API tidak ikut dipaketkan. Model tetap diperlukan:
 pilih folder `api/app/models` yang sudah ada melalui **Settings**, atau salin isinya ke folder `models` di sebelah executable.
 Model tidak diunduh otomatis. GPU dengan dukungan DirectX 12 dan driver yang sesuai tetap diperlukan.
 
 GUI dibuka dengan server berhenti. Tekan **Start server** untuk menjalankannya. **Stop** saat pemuatan model membatalkan startup; **Force stop** menghentikan proses yang belum selesai ditutup. Tombol hanya mengontrol server milik GUI.
-Jika port sudah dipakai server lokal atau Docker, hentikan server tersebut atau ubah **API port** pada GUI.
+Jika port sudah dipakai proses lain, hentikan proses tersebut atau ubah **API port** pada GUI.
 
 GUI tidak membaca atau mengubah `api/.env`. Atur LLM dan akses perangkat lain melalui **Settings**.
 Google Translate memerlukan internet; LLM memerlukan layanan dan model yang sudah tersedia.

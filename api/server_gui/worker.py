@@ -145,11 +145,10 @@ def run_worker(settings_path: Path) -> int:
     threading.Thread(target=read_commands, name="desktop-control", daemon=True).start()
     # Set every backend option before importing modules with import-time settings.
     overrides = {
-        "API_LOAD_DOTENV": "False", "API_CONTAINER": "False", "API_HOST": host,
+        "API_LOAD_DOTENV": "False", "API_HOST": host,
         "API_PORT": str(prefs.port), "API_DEBUG": "False", "API_RELOAD": "False",
         "GPU_PROVIDER": "DmlExecutionProvider", "MANGA_MODEL_DIR": str(model_dir),
         "LLM_API_KEY": prefs.api_key, "LLM_BASE_URL": prefs.effective_llm_base_url(),
-        "LLM_BASE_URL_LOCAL": "", "LLM_BASE_URL_DOCKER": "",
         "LLM_MODEL": prefs.llm_model, "LLM_TIMEOUT_SECONDS": str(prefs.llm_timeout),
         "DEFAULT_TRANSLATOR": prefs.translator,
         "ALLOWED_ORIGINS": "http://localhost:3000,http://127.0.0.1:3000",

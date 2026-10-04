@@ -166,7 +166,7 @@ def main() -> int:
     output_runtime()
     import onnxruntime as ort
     if "DmlExecutionProvider" not in ort.get_available_providers():
-        raise RuntimeError("Use the local DirectML environment, not the Docker/CUDA environment.")
+        raise RuntimeError("The Windows package requires onnxruntime-directml with DmlExecutionProvider.")
     subprocess.run([sys.executable, "-m", "pip", "check"], check=True)
     WORK.mkdir(parents=True, exist_ok=True)
     # A fresh staging directory prevents PyInstaller from deleting existing external models.
@@ -201,7 +201,7 @@ def main() -> int:
         (OUTPUT / "package-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         (OUTPUT / "START-HERE.txt").write_text(
             "Manga Translator Server (Windows x64)\n\n"
-            "Run MangaTranslatorServer.exe. Python and Docker are not required.\n"
+            "Run MangaTranslatorServer.exe. Python is bundled.\n"
             "The server stays stopped on launch. Click Start server when ready.\n"
             "Models are external. Put comic-text-detector.onnx and the manga-ocr folder\n"
             "inside models, or choose an existing model folder in Settings.\n"
