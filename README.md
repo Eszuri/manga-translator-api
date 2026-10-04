@@ -26,8 +26,9 @@ models/                  Model deteksi dan OCR lokal
 assets/branding/         icon extension
 docs/                    Dokumentasi
 scripts/
-  package-extension.bat  Build extension
-  local-server.bat       Start server lokal lewat CLI
+  process-images.bat     Proses gambar dari api/Images/original Images
+  build-extension.bat    Build extension
+  start-server.bat       Start server lokal lewat CLI
 dist/                    Paket server dan extension
 ```
 
@@ -36,8 +37,9 @@ dist/                    Paket server dan extension
 
 | Keperluan | File |
 | --- | --- |
-| Build extension | `scripts\package-extension.bat` |
-| Server lokal Windows | `scripts\local-server.bat` |
+| Build extension | `scripts\build-extension.bat` |
+| Server lokal Windows | `scripts\start-server.bat` |
+| Proses gambar lokal | `scripts\process-images.bat` |
 
 ## Menjalankan backend
 
@@ -45,7 +47,7 @@ Siapkan `api/.env`, model, dan environment `.venv-gpu` terlebih dahulu. Jalankan
 server dari terminal:
 
 ```powershell
-scripts\local-server.bat
+scripts\start-server.bat
 ```
 
 Untuk kontrol melalui GUI, jalankan langsung
@@ -74,7 +76,7 @@ Dokumentasi endpoint tersedia di `http://127.0.0.1:8000/docs`.
 Untuk build extension (.crx / .zip):
 
 ```powershell
-scripts\package-extension.bat
+scripts\build-extension.bat
 ```
 
 Script memakai PowerShell bawaan Windows; Python tidak diperlukan untuk build extension.
@@ -121,12 +123,11 @@ Model di `models` harus berisi `comic-text-detector.onnx` dan folder
 Masukkan JPEG, PNG, atau WebP ke `api/Images/original Images`. Contoh satu gambar pertama:
 
 ```powershell
-Push-Location api
-..\.venv-gpu\Scripts\python.exe -m tools.build_local --device gpu --limit 1
-Pop-Location
+scripts\process-images.bat --limit 1
 ```
 
 Gunakan `--image "nama.jpg"` untuk memilih file tertentu.
+Script berhenti jika folder sumber belum ada atau tidak berisi JPEG, PNG, atau WebP.
 Build memakai Google Translate dan arah baca kanan ke kiri.
 Hasil ada di `api/Images/build Images`: `Box`, `Text Box`, `OCR`,
 `translate`, `inpainting`, dan `render`. Build ulang menimpa hasil dengan nama sama.
