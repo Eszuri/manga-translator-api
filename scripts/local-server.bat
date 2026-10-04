@@ -1,7 +1,7 @@
 @echo off
 setlocal
 set PYTHONDONTWRITEBYTECODE=1
-pushd "%~dp0\..\..\.." || (
+pushd "%~dp0\.." || (
     echo [FAILED] Project root could not be opened.
     set "SERVER_EXIT_CODE=1"
     goto :finish

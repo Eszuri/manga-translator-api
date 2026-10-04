@@ -6,6 +6,11 @@ import os
 from pathlib import Path
 import sys
 
+if not getattr(sys, "frozen", False):
+    project_root = Path(__file__).resolve().parents[2]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
 
 def restore_worker_streams():
     """Windowed frozen apps have None streams even with inherited QProcess pipes."""

@@ -100,7 +100,8 @@ class ServerController(QObject):
         environment.insert("PYTHONUNBUFFERED", "1")
         environment.insert("PYTHONIOENCODING", "utf-8")
         self.process.setProcessEnvironment(environment)
-        self.process.setWorkingDirectory(str(application_dir()))
+        work_directory = application_dir() if getattr(sys, "frozen", False) else application_dir() / "api"
+        self.process.setWorkingDirectory(str(work_directory))
         arguments = ["--server-worker", "--settings-file", str(settings_path.resolve())]
         if not getattr(sys, "frozen", False):
             arguments = ["-u", "-m", "tools.run_gui", *arguments]

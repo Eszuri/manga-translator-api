@@ -14,12 +14,12 @@ def default_model_dir() -> Path:
     """Find existing models without copying, downloading, or scanning user disks."""
     directory = application_dir()
     if not getattr(sys, "frozen", False):
-        return directory / "app" / "models"
-    candidates = [directory / "models", directory / "api" / "app" / "models"]
+        return directory / "models"
+    candidates = [directory / "models"]
     # A development build is normally at <project>/dist/MangaTranslatorServer.
     # Look only at this known layout; arbitrary ancestor folders are not searched.
     if directory.parent.name.casefold() == "dist":
-        candidates.append(directory.parent.parent / "api" / "app" / "models")
+        candidates.append(directory.parent.parent / "models")
     for candidate in candidates:
         if _complete_model_dir(candidate):
             return candidate
@@ -42,11 +42,15 @@ def normalize_model_dir(value: str | Path) -> Path:
     exact selection instead of silently loading models from somewhere else.
     """
     directory = Path(value).expanduser().resolve()
+    # Migrate a saved selection from the previous source layout.
+    if tuple(part.casefold() for part in directory.parts[-3:]) == ("api", "app", "models"):
+        replacement = directory.parents[2] / "models"
+        if _complete_model_dir(replacement):
+            return replacement
     candidates = [directory]
     if directory.name.casefold() == "manga-ocr":
         candidates.append(directory.parent)
-    candidates.extend((directory / "models", directory / "app" / "models",
-                       directory / "api" / "app" / "models"))
+    candidates.append(directory / "models")
     for candidate in candidates:
         if _complete_model_dir(candidate):
             return candidate
@@ -69,4 +73,7 @@ def icon_path() -> Path:
     bundled = Path(__file__).resolve().parent / "assets" / "icon128.png"
     if bundled.is_file():
         return bundled
-    return application_dir().parent / "extension" / "icons" / "icon128.png"
+    directory = application_dir()
+    if getattr(sys, "frozen", False) and directory.parent.name.casefold() == "dist":
+        directory = directory.parent.parent
+    return directory / "extension" / "icons" / "icon128.png"

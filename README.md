@@ -13,23 +13,21 @@ api/
     core/                Konfigurasi dan kebijakan GPU
     services/            Deteksi, OCR, terjemahan, inpainting, dan penataan teks
     assets/fonts/        Font untuk hasil render
-    models/              Model lokal
   tools/                 Runner server dan builder gambar
   requirements/          Dependency server lokal dan GUI
-  server_gui/            Antarmuka kontrol server Windows
   Images/
     original Images/     Gambar manga asli
     build Images/        Hasil build manga translator
   .env.example           sample environment
   .env                   konfigurasi API, dan kawan kawan
 extension/               Source extension browser
+server_gui/              Antarmuka kontrol server Windows
+models/                  Model deteksi dan OCR lokal
 assets/branding/         icon extension
 docs/                    Dokumentasi
 scripts/
-  tasks/                 Builder package extension
-  windows/
-    build/               Shortcut build gambar dan extension
-    run/                 Shortcut server lokal dan GUI
+  package-extension.bat  Build extension
+  local-server.bat       Start server lokal lewat CLI
 dist/                    Paket server dan extension
 ```
 
@@ -38,11 +36,8 @@ dist/                    Paket server dan extension
 
 | Keperluan | File |
 | --- | --- |
-| Build gambar lokal | `scripts\windows\build\local-images.bat` |
-| Build extension | `scripts\windows\build\package-extension.bat` |
-| Server lokal Windows | `scripts\windows\run\local-server.bat` |
-| GUI server dari source | `scripts\windows\run\local-server-gui.bat` |
-| Build paket GUI server | `scripts\windows\build\package-server-gui.bat` |
+| Build extension | `scripts\package-extension.bat` |
+| Server lokal Windows | `scripts\local-server.bat` |
 
 ## Menjalankan backend
 
@@ -50,11 +45,12 @@ Siapkan `api/.env`, model, dan environment `.venv-gpu` terlebih dahulu. Jalankan
 server dari terminal:
 
 ```powershell
-scripts\windows\run\local-server.bat
+scripts\local-server.bat
 ```
 
-Untuk kontrol melalui GUI, jalankan `scripts\windows\run\local-server-gui.bat`,
-lalu tekan **Start server**. GUI tidak menyalakan server secara otomatis.
+Untuk kontrol melalui GUI, jalankan langsung
+`dist\MangaTranslatorServer\MangaTranslatorServer.exe`, lalu tekan **Start server**.
+GUI tidak menyalakan server secara otomatis.
 
 Periksa API:
 
@@ -78,11 +74,11 @@ Dokumentasi endpoint tersedia di `http://127.0.0.1:8000/docs`.
 Untuk build extension (.crx / .zip):
 
 ```powershell
-scripts\windows\build\package-extension.bat
+scripts\package-extension.bat
 ```
 
-Script membutuhkan perintah `python` pada `PATH`.  
-CRX terbuild jika browser Chromium (google chrome,dkk) ditemukan.
+Script memakai PowerShell bawaan Windows; Python tidak diperlukan untuk build extension.
+CRX dibuat jika browser Chromium (Chrome, Edge, atau Brave) ditemukan.
  Hasil berada di `dist`.
 
 ## bagaimana gambar diproses
@@ -117,7 +113,7 @@ py -3.11 -m venv .venv-gpu
 ```
 
 Salin `api/.env.example` ke `api/.env` jika belum ada.
-Model di `api/app/models` harus berisi `comic-text-detector.onnx` dan folder
+Model di `models` harus berisi `comic-text-detector.onnx` dan folder
 `manga-ocr` dengan encoder, decoder, tokenizer, serta konfigurasi OCR.
 
 ## Build gambar lokal
@@ -125,7 +121,9 @@ Model di `api/app/models` harus berisi `comic-text-detector.onnx` dan folder
 Masukkan JPEG, PNG, atau WebP ke `api/Images/original Images`. Contoh satu gambar pertama:
 
 ```powershell
-scripts\windows\build\local-images.bat --limit 1
+Push-Location api
+..\.venv-gpu\Scripts\python.exe -m tools.build_local --device gpu --limit 1
+Pop-Location
 ```
 
 Gunakan `--image "nama.jpg"` untuk memilih file tertentu.
@@ -175,7 +173,7 @@ Pastikan firewall PC mengizinkan koneksi ke port API.
 ## Setelah mengubah kode atau pengaturan konfigurasi
 
 - Server lokal: perubahan kode otomatis diterapkan jika `API_RELOAD=True`; setelah `.env` berubah, restart server.
-- Paket GUI: setelah kode atau dependency berubah, build ulang paket. Setelah pengaturan GUI berubah, restart server melalui GUI.
+- GUI dari source: restart aplikasi setelah kode atau dependency berubah. Setelah pengaturan GUI berubah, restart server melalui GUI.
 
 
 ## Jika terjadi error
@@ -187,7 +185,7 @@ Untuk server lokal, baca pesan pada terminal. Untuk GUI, buka tab **Logs**.
 | --- | --- |
 | `Required GPU provider ... is unavailable` atau `GPU-only backend requires ...` | Provider GPU yang dibutuhkan tidak tersedia. Periksa `Available providers`; server Windows memerlukan `DmlExecutionProvider` |
 | `failed to activate ... Active providers: ...` | Sesi model gagal mengaktifkan provider GPU yang diminta. Baca error pemuatan ONNX sebelumnya pada log.|
-| `Missing model files ...` | File yang disebut setelah pesan ini tidak ditemukan pada folder model yang dipilih. Cocokkan daftar tersebut dengan file di `api/app/models` atau folder pada pengaturan GUI |
+| `Missing model files ...` | File yang disebut setelah pesan ini tidak ditemukan pada folder model yang dipilih. Cocokkan daftar tersebut dengan file di `models` atau folder pada pengaturan GUI |
 | HTTP `422` | API menolak parameter. `detail.loc` menunjukkan parameter yang salah dan `detail.msg` menjelaskan alasannya. Contoh: `body.file: Field required` berarti file tidak terkirim; `body.device: Input should be 'gpu'` berarti nilai perangkat ditolak |
 | `LLM is not configured` | Pemeriksaan konfigurasi LLM gagal. Untuk layanan yang membutuhkan kunci, isi `LLM_API_KEY`. atau isi .env ada yg salah|
 | `Cannot connect to the LLM endpoint` | Backend gagal membuat koneksi ke layanan LLM. Periksa `LLM_BASE_URL` dan pastikan layanan LLM berjalan |
@@ -204,13 +202,23 @@ Pada respons stream, `stage=error` berarti proses gagal meskipun HTTP tetap 200.
 
 ## GUI server Windows
 
-- Jalankan dari source: `scripts\windows\run\local-server-gui.bat`.
-- Build paket Windows: `scripts\windows\build\package-server-gui.bat`.
-- Hasil: `dist/MangaTranslatorServer/MangaTranslatorServer.exe`. Folder `_internal` harus tetap berada di sebelah executable.
+Jalankan GUI yang sudah dipaketkan dari `dist/MangaTranslatorServer/MangaTranslatorServer.exe`.
+Folder `_internal` harus tetap berada di sebelah executable. Paket ini tidak ikut
+berubah ketika kode source diedit.
+
+Untuk menjalankan GUI langsung dari source:
+
+```powershell
+Push-Location api
+..\.venv-gpu\Scripts\python.exe -m tools.run_gui
+Pop-Location
+```
+
+Instal `api/requirements/gui.txt` ke `.venv-gpu` lebih dulu jika PySide6 belum tersedia.
 
 Paket menyertakan Python dan dependency server; PC tujuan tidak perlu memasang Python secara terpisah.
 Model ONNX, gambar, `.env`, dan kunci API tidak ikut dipaketkan. Model tetap diperlukan:
-pilih folder `api/app/models` yang sudah ada melalui **Settings**, atau salin isinya ke folder `models` di sebelah executable.
+pilih folder `models` di root proyek melalui **Settings**, atau salin isinya ke folder `models` di sebelah executable.
 Model tidak diunduh otomatis. GPU dengan dukungan DirectX 12 dan driver yang sesuai tetap diperlukan.
 
 GUI dibuka dengan server berhenti. Tekan **Start server** untuk menjalankannya. **Stop** saat pemuatan model membatalkan startup; **Force stop** menghentikan proses yang belum selesai ditutup. Tombol hanya mengontrol server milik GUI.
