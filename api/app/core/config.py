@@ -1,11 +1,12 @@
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+if os.getenv("API_LOAD_DOTENV", "true").lower() not in ("false", "0", "no", "off"):
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -67,6 +68,7 @@ class Settings(BaseModel):
     LLM_BASE_URL: str = llm_base_url()
     LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
     LLM_TIMEOUT_SECONDS: float = Field(default=float(os.getenv("LLM_TIMEOUT_SECONDS", "30.0")), gt=0, allow_inf_nan=False)
+    DEFAULT_TRANSLATOR: Literal["google", "llm"] = os.getenv("DEFAULT_TRANSLATOR", "llm")
 
     model_config = {"validate_default": True}
 

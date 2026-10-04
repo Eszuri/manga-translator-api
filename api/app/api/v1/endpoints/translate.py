@@ -16,6 +16,7 @@ from app.schemas import (
     TranslatedDialogueItem
 )
 from app.core.gpu import require_gpu_device
+from app.core.config import settings
 from app.services.detector import sort_manga_reading_order
 from app.services.ocr_service import get_ocr_service
 from app.services.translation_service import get_translation_service
@@ -142,7 +143,7 @@ async def inpaint_and_translate_manga_page(
         description="Target translation language code ('id' for Indonesian, 'en' for English)"
     ),
     translator: Literal["llm", "google"] = Form(
-        "llm",
+        settings.DEFAULT_TRANSLATOR,
         description="Translation engine: 'llm' (OpenAI/Ollama) or 'google' (Google Translate)"
     ),
     detector_type: Literal["hybrid", "comic_text_detector"] = Form(
@@ -258,7 +259,7 @@ async def inpaint_stream_manga_page(
         description="Target translation language code ('id' for Indonesian, 'en' for English)"
     ),
     translator: Literal["llm", "google"] = Form(
-        "llm",
+        settings.DEFAULT_TRANSLATOR,
         description="Translation engine: 'llm' (OpenAI/Ollama) or 'google' (Google Translate)"
     ),
     detector_type: Literal["hybrid", "comic_text_detector"] = Form(

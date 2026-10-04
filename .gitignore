@@ -13,6 +13,7 @@ api/Images/original Images/
 api/Images/build Images/
 
 # Build artifacts
+/build/
 dist/
 *.crx
 *.pem

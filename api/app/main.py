@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import logging
+from time import perf_counter
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -16,12 +17,18 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Fail startup unless both inference models create strict GPU sessions."""
+    startup_started = perf_counter()
     from app.services.comic_text_detector import ComicTextDetector
     from app.services.ocr_service import get_ocr_service
 
     app.state.gpu_provider = required_gpu_provider()
     app.state.detector = ComicTextDetector(device="gpu")
     app.state.ocr = get_ocr_service(device="gpu")
+    logger.info(
+        "[startup:ready] GPU models ready in %.1fs; starting HTTP server",
+        perf_counter() - startup_started,
+        extra={"startup_phase": "models_ready"},
+    )
     yield
 
 app = FastAPI(

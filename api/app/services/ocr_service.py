@@ -2,6 +2,7 @@ import os
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 import re
 import logging
+from time import perf_counter
 from typing import List, Optional
 from PIL import Image, ImageDraw
 import numpy as np
@@ -11,10 +12,11 @@ from transformers import ViTImageProcessorPil as ViTImageProcessor, BertJapanese
 
 from app.schemas import DetectedBubble
 from app.core.gpu import configure_gpu_session, require_gpu_device, verify_gpu_session
+from app.core.paths import MODEL_DIR
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OCR_DIR = os.path.join(os.path.dirname(__file__), "..", "models", "manga-ocr")
+DEFAULT_OCR_DIR = str(MODEL_DIR / "manga-ocr")
 
 
 class MangaOcrService:
@@ -45,9 +47,18 @@ class MangaOcrService:
 
         model_source = self.model_dir if os.path.exists(encoder_path) else "mayocream/manga-ocr-onnx"
 
-        logger.info(f"Loading OCR processor and tokenizer from: {model_source}")
+        started = perf_counter()
+        logger.info(
+            "[startup:ocr_processor] Loading OCR processor and tokenizer: %s",
+            model_source,
+            extra={"startup_phase": "loading_ocr_processor"},
+        )
         self.processor = ViTImageProcessor.from_pretrained(model_source)
         self.tokenizer = BertJapaneseTokenizer.from_pretrained(model_source)
+        logger.info(
+            "[startup:ocr_processor] OCR processor and tokenizer ready in %.1fs",
+            perf_counter() - started,
+        )
 
         self.eos_token_id = self.tokenizer.sep_token_id or self.tokenizer.eos_token_id
         self.bos_token_id = self.tokenizer.cls_token_id or self.tokenizer.bos_token_id
@@ -59,12 +70,33 @@ class MangaOcrService:
 
         providers = configure_gpu_session(opts)
 
-        logger.info(f"Manga-OCR active providers: {providers}")
+        started = perf_counter()
+        logger.info(
+            "[startup:ocr_encoder] Loading Manga OCR encoder: %s",
+            encoder_path,
+            extra={"startup_phase": "loading_ocr_encoder"},
+        )
         self.encoder_session = ort.InferenceSession(encoder_path, opts, providers=providers)
-        self.decoder_session = ort.InferenceSession(decoder_path, opts, providers=providers)
+        encoder_provider = verify_gpu_session(self.encoder_session, "Manga OCR encoder")
+        logger.info(
+            "[startup:ocr_encoder] Manga OCR encoder ready in %.1fs (verified GPU provider: %s)",
+            perf_counter() - started,
+            encoder_provider,
+        )
 
-        verify_gpu_session(self.encoder_session, "Manga OCR encoder")
-        verify_gpu_session(self.decoder_session, "Manga OCR decoder")
+        started = perf_counter()
+        logger.info(
+            "[startup:ocr_decoder] Loading Manga OCR decoder: %s",
+            decoder_path,
+            extra={"startup_phase": "loading_ocr_decoder"},
+        )
+        self.decoder_session = ort.InferenceSession(decoder_path, opts, providers=providers)
+        decoder_provider = verify_gpu_session(self.decoder_session, "Manga OCR decoder")
+        logger.info(
+            "[startup:ocr_decoder] Manga OCR decoder ready in %.1fs (verified GPU provider: %s)",
+            perf_counter() - started,
+            decoder_provider,
+        )
 
         self.device_name = self._compute_device_name()
 

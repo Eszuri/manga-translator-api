@@ -265,8 +265,10 @@ class MangaTranslationService:
         target_lang: str = "id"
     ) -> Dict[int, str]:
         """Asynchronous HTTP call to the OpenAI-compatible endpoint."""
+        if not self.model.strip():
+            raise TranslationError("LLM model ID is empty. Set the model ID in GUI Settings > Translation or LLM_MODEL for the command-line server.")
         if not self.is_configured():
-            raise TranslationError("LLM is not configured. Set LLM_API_KEY and LLM_BASE_URL in api/.env.")
+            raise TranslationError("The LLM endpoint requires an API key. Set it in GUI Settings > Translation or LLM_API_KEY for the command-line server.")
 
         url = f"{self.base_url}/chat/completions"
         headers = {
@@ -297,7 +299,7 @@ class MangaTranslationService:
         except TranslationError:
             raise
         except httpx.ConnectError as e:
-            raise TranslationError("Cannot connect to the LLM endpoint. Check LLM_BASE_URL_LOCAL/DOCKER and whether the server is running.") from e
+            raise TranslationError("Cannot connect to the configured LLM base URL. Verify the address and start the LLM service before retrying.") from e
         except httpx.TimeoutException as e:
             raise TranslationError(f"LLM request timed out after {self.timeout_seconds}s.") from e
         except Exception as e:

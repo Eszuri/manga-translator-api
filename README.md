@@ -229,3 +229,22 @@ Pada respons stream, `stage=error` berarti proses gagal meskipun HTTP tetap 200.
 
 
 <center><b>Selamat Mencoba</b></center>
+
+## GUI server Windows
+
+- Jalankan dari source: `scripts\windows\run\local-server-gui.bat`.
+- Build paket Windows: `scripts\windows\build\package-server-gui.bat`.
+- Hasil: `dist/MangaTranslatorServer/MangaTranslatorServer.exe`. Folder `_internal` harus tetap berada di sebelah executable.
+
+Paket menyertakan Python dan dependency server; tidak membutuhkan instalasi Python atau Docker pada PC tujuan.
+Model ONNX, gambar, `.env`, dan kunci API tidak ikut dipaketkan. Model tetap diperlukan:
+pilih folder `api/app/models` yang sudah ada melalui **Settings**, atau salin isinya ke folder `models` di sebelah executable.
+Model tidak diunduh otomatis. GPU dengan dukungan DirectX 12 dan driver yang sesuai tetap diperlukan.
+
+GUI dibuka dengan server berhenti. Tekan **Start server** untuk menjalankannya. **Stop** saat pemuatan model membatalkan startup; **Force stop** menghentikan proses yang belum selesai ditutup. Tombol hanya mengontrol server milik GUI.
+Jika port sudah dipakai server lokal atau Docker, hentikan server tersebut atau ubah **API port** pada GUI.
+
+GUI tidak membaca atau mengubah `api/.env`. Atur LLM dan akses perangkat lain melalui **Settings**.
+Google Translate memerlukan internet; LLM memerlukan layanan dan model yang sudah tersedia.
+Pengaturan dan log disimpan di `%LOCALAPPDATA%\MangaTranslatorServer`; kunci API dilindungi Windows DPAPI.
+Akses jaringan mati secara default. Aktifkan **Network** jika diperlukan; izin firewall tetap diatur sendiri.

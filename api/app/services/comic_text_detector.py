@@ -1,4 +1,6 @@
 import os
+import logging
+from time import perf_counter
 from typing import List, Optional, Tuple
 from PIL import Image
 import numpy as np
@@ -7,15 +9,13 @@ import onnxruntime as ort
 
 from app.schemas import BoundingBox, DetectedBubble
 from app.core.gpu import configure_gpu_session, require_gpu_device, verify_gpu_session
+from app.core.paths import MODEL_DIR
 from app.services.detector import BaseBubbleDetector, sort_manga_reading_order
 from app.services.balloon_geometry import refine_text_boxes
 
 
-DEFAULT_MODEL_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "models",
-    "comic-text-detector.onnx"
-)
+DEFAULT_MODEL_PATH = str(MODEL_DIR / "comic-text-detector.onnx")
+logger = logging.getLogger(__name__)
 
 
 def letterbox(
@@ -65,9 +65,20 @@ class ComicTextDetector(BaseBubbleDetector):
         
         require_gpu_device(device)
 
+        started = perf_counter()
+        logger.info(
+            "[startup:detector] Loading comic text detector: %s",
+            self.model_path,
+            extra={"startup_phase": "loading_detector"},
+        )
         self._init_session()
 
-        verify_gpu_session(self.session, "Comic text detector")
+        provider = verify_gpu_session(self.session, "Comic text detector")
+        logger.info(
+            "[startup:detector] Comic text detector ready in %.1fs (verified GPU provider: %s)",
+            perf_counter() - started,
+            provider,
+        )
 
     def _init_session(self):
         """Initializes or reuses the ONNX inference session."""
