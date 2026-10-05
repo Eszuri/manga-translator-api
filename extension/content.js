@@ -1,6 +1,8 @@
 class MangaTranslator {
   constructor() {
     this.processedImages = new Set();
+    this.pendingImages = new Set();
+    this.failedImages = new Map();
     this.processingQueue = [];
     this.maxConcurrentJobs = 2;
     this.activeJobs = new Map();
@@ -79,12 +81,12 @@ class MangaTranslator {
           if (this.isEnabled) {
             this.scanAndProcess();
           } else {
-            this.processingQueue.forEach((img) => this.processedImages.delete(img));
+            this.processingQueue.forEach((img) => this.pendingImages.delete(img));
             this.processingQueue = [];
             this.activeJobs.forEach(({ img }) => {
               this.finishImageLoading(null, img);
               delete img.dataset.mtJobId;
-              this.processedImages.delete(img);
+              this.pendingImages.delete(img);
             });
             this.activeJobs.clear();
             this.hideProgressBar();
@@ -147,7 +149,7 @@ class MangaTranslator {
     document.addEventListener('keydown', (e) => {
       if (e.altKey && e.key.toLowerCase() === 't') {
         e.preventDefault();
-        this.scanAndProcess();
+        this.scanAndProcess({ retryFailed: true });
       } else if (e.altKey && e.key.toLowerCase() === 'c') {
         e.preventDefault();
         this.restoreAllOriginals();
@@ -158,6 +160,7 @@ class MangaTranslator {
   async scanAndProcess(options = {}) {
     if (!this.isEnabled) return;
     if (this.isScanning) return;
+    if (options.retryFailed) this.failedImages.clear();
     this.isScanning = true;
 
     this.showProgressBar();
@@ -190,16 +193,16 @@ class MangaTranslator {
     }
 
     let mangaImgs = this.getPageImages().filter(
-      img => !this.processedImages.has(img) && this.isMangaImage(img)
+      img => this.canProcessImage(img) && this.isMangaImage(img)
     );
 
     if (!options.bypassCache && window.MangaTranslationCache && mangaImgs.length > 0) {
       restoredFromCache += await this.restoreCachedImages(settings, mangaImgs);
-      mangaImgs = mangaImgs.filter(img => !this.processedImages.has(img));
+      mangaImgs = mangaImgs.filter(img => this.canProcessImage(img));
     }
 
     if (mangaImgs.length === 0 && this.processingQueue.length === 0 && this.activeJobs.size === 0) {
-      this.totalImages = this.processedImages.size;
+      this.totalImages = this.processedImages.size + this.pendingImages.size + this.failedImages.size;
       this.isScanning = false;
       this.updateProgressBar();
       this.hideProgressBar();
@@ -216,12 +219,13 @@ class MangaTranslator {
 
       img.dataset.mtCacheKey = descriptor.cacheKey;
 
-      this.processedImages.add(img);
+      this.failedImages.delete(img);
+      this.pendingImages.add(img);
       this.wrapImage(img);
       this.processingQueue.push(img);
     }
 
-    this.totalImages = this.processedImages.size;
+    this.totalImages = this.processedImages.size + this.pendingImages.size + this.failedImages.size;
 
     if (this.progressBar) {
       const pText = this.progressBar.querySelector('.manga-translator-progress-text');
@@ -307,6 +311,7 @@ class MangaTranslator {
 
   getCacheSource(img) {
     return img.dataset.mtOriginalSrc ||
+      (img.complete && img.naturalWidth > 0 ? this.getCurrentImageSource(img) : '') ||
       img.dataset.src ||
       img.dataset.lazySrc ||
       img.dataset.original ||
@@ -317,7 +322,6 @@ class MangaTranslator {
 
   getImageCacheDescriptor(img, settings, knownIndex = null) {
     const originalSrc = this.getCacheSource(img);
-    const legacySource = this.getCurrentImageSource(img) || originalSrc;
     const imageIndex = knownIndex === null ? this.getPageImages().indexOf(img) : knownIndex;
     const cache = window.MangaTranslationCache;
 
@@ -330,10 +334,7 @@ class MangaTranslator {
         originalSrc,
         window.location.href,
         imageIndex
-      ) : '',
-      legacyCacheKey: cache && cache.buildLegacyCacheKey
-        ? cache.buildLegacyCacheKey(settings, legacySource)
-        : ''
+      ) : ''
     };
   }
 
@@ -345,23 +346,21 @@ class MangaTranslator {
     const descriptors = this.getPageImages()
       .map((img, imageIndex) => this.getImageCacheDescriptor(img, settings, imageIndex))
       .filter(({ img, originalSrc }) =>
-        candidates.has(img) && !this.processedImages.has(img) && Boolean(originalSrc)
+        candidates.has(img) && this.canProcessImage(img) && Boolean(originalSrc)
       );
 
     if (descriptors.length === 0) return 0;
 
-    const keys = descriptors.flatMap(({ cacheKey, legacyCacheKey }) =>
-      legacyCacheKey ? [cacheKey, legacyCacheKey] : [cacheKey]
-    );
+    const keys = descriptors.map(({ cacheKey }) => cacheKey);
     const cachedEntries = cache.getCachedTranslations
       ? await cache.getCachedTranslations(keys)
       : new Map(await Promise.all(keys.map(async key => [key, await cache.getCachedTranslation(key)])));
 
     let restored = 0;
     for (const descriptor of descriptors) {
-      const currentEntry = cachedEntries.get(descriptor.cacheKey);
-      const legacyEntry = cachedEntries.get(descriptor.legacyCacheKey);
-      const cached = currentEntry || legacyEntry;
+      const cached = cachedEntries.get(descriptor.cacheKey);
+      if (!cached || cache.normalizeUrlForKey(cached.originalSrc, true) !==
+          cache.normalizeUrlForKey(descriptor.originalSrc, true)) continue;
       const originalWidth = cached && cached.originalWidth || descriptor.img.naturalWidth;
       const originalHeight = cached && cached.originalHeight || descriptor.img.naturalHeight;
       if (!this.isMangaDimensions(originalWidth, originalHeight)) continue;
@@ -388,22 +387,6 @@ class MangaTranslator {
       this.wrapImage(descriptor.img);
       this.totalProcessed++;
       restored++;
-
-      if (!currentEntry && legacyEntry) {
-        cache.saveCachedTranslation({
-          cacheKey: descriptor.cacheKey,
-          pageUrl: window.location.href,
-          originalSrc: descriptor.originalSrc,
-          translatedBlob: legacyEntry.translatedBlob,
-          translatedData: legacyEntry.translatedData,
-          originalWidth,
-          originalHeight,
-          targetLang: settings.targetLang,
-          translator: settings.translator,
-          readingDirection: settings.readingDirection,
-          timestamp: Date.now()
-        }).catch(() => {});
-      }
     }
 
     return restored;
@@ -411,6 +394,23 @@ class MangaTranslator {
 
   getCurrentImageSource(img) {
     return img.currentSrc || img.src || img.dataset.src || img.dataset.lazySrc || '';
+  }
+
+  canProcessImage(img) {
+    if (this.processedImages.has(img) || this.pendingImages.has(img)) return false;
+    const failure = this.failedImages.get(img);
+    // Avoid retry loops caused by our own DOM changes. Alt+T retries failures
+    // immediately; later automatic scans can retry after the cooldown.
+    return !failure || failure.source !== this.getCurrentImageSource(img) ||
+      Date.now() - failure.timestamp >= 30000;
+  }
+
+  recordImageFailure(img, error) {
+    this.failedImages.set(img, {
+      source: this.getCurrentImageSource(img),
+      timestamp: Date.now(),
+      error: error || 'Image translation failed.'
+    });
   }
 
   scheduleScan(delayMs = 300) {
@@ -499,14 +499,22 @@ class MangaTranslator {
     const jobId = this.createJobId();
     const settings = this.settings || await this.loadSettings();
     const descriptor = this.getImageCacheDescriptor(img, settings);
+    const originalSrc = this.getCurrentImageSource(img);
     const job = {
       id: jobId,
       img,
-      originalSrc: this.getCurrentImageSource(img),
+      originalSrc,
+      settings,
       originalWidth: img.naturalWidth,
       originalHeight: img.naturalHeight,
-      cacheKey: img.dataset.mtCacheKey || descriptor.cacheKey
+      cacheKey: window.MangaTranslationCache
+        ? window.MangaTranslationCache.buildCacheKey(settings, originalSrc, window.location.href, descriptor.imageIndex)
+        : descriptor.cacheKey
     };
+    this.failedImages.delete(img);
+    this.pendingImages.add(img);
+    img.dataset.mtOriginalSrc = originalSrc;
+    img.dataset.mtCacheKey = job.cacheKey;
     this.activeJobs.set(jobId, job);
     img.dataset.mtJobId = jobId;
 
@@ -520,7 +528,7 @@ class MangaTranslator {
       if (!isCurrentJob) return;
 
       if (this.getCurrentImageSource(img) !== job.originalSrc) {
-        this.processedImages.delete(img);
+        delete img.dataset.mtOriginalSrc;
         delete img.dataset.mtCacheKey;
         this.scheduleScan();
         console.warn('[MangaTranslator] Image source changed while translating; stale result ignored.');
@@ -533,6 +541,8 @@ class MangaTranslator {
           delete img.dataset.mtCacheObjectUrl;
         }
         img.src = result.data;
+        this.processedImages.add(img);
+        this.failedImages.delete(img);
         this.totalProcessed++;
 
         if (window.MangaTranslationCache) {
@@ -558,19 +568,24 @@ class MangaTranslator {
           }
         });
       } else {
+        this.recordImageFailure(img, result.error);
         console.warn('[MangaTranslator] Inpaint failed:', result.error);
       }
     } catch (e) {
+      if (this.activeJobs.get(jobId) !== job || img.dataset.mtJobId !== jobId) return;
       if (e && (e.code === 'IMAGE_NOT_READY' || e.code === 'IMAGE_SOURCE_CHANGED')) {
-        this.processedImages.delete(img);
+        delete img.dataset.mtOriginalSrc;
         delete img.dataset.mtCacheKey;
         this.scheduleScan();
+      } else {
+        this.recordImageFailure(img, e && e.message || String(e));
       }
       console.error('[MangaTranslator] Failed to translate image:', e);
     } finally {
       const ownsJob = this.activeJobs.get(jobId) === job;
       if (ownsJob) {
         this.activeJobs.delete(jobId);
+        this.pendingImages.delete(img);
         if (img.dataset.mtJobId === jobId) delete img.dataset.mtJobId;
         this.finishImageLoading(null, img);
       }
@@ -580,7 +595,7 @@ class MangaTranslator {
   }
 
   async translateImage(job) {
-    const settings = this.settings || await this.loadSettings();
+    const settings = job.settings;
     const fileData = await this.getImageDataUrl(job.img, job.originalSrc);
 
     return this.sendMessage({
@@ -896,8 +911,13 @@ class MangaTranslator {
 
     const text = this.progressBar.querySelector('.manga-translator-progress-text');
     const fill = this.progressBar.querySelector('.manga-translator-progress-fill');
-    text.textContent = `✅ Done! ${this.totalProcessed} pages translated`;
-    fill.style.width = '100%';
+    const failed = this.failedImages.size;
+    text.textContent = failed
+      ? `${this.totalProcessed} pages translated; ${failed} failed. Press Alt+T to retry.`
+      : `✅ Done! ${this.totalProcessed} pages translated`;
+    fill.style.width = failed
+      ? `${this.totalImages ? (this.totalProcessed / this.totalImages) * 100 : 0}%`
+      : '100%';
 
     if (this.progressBarHideTimer) clearTimeout(this.progressBarHideTimer);
     this.progressBarHideTimer = setTimeout(() => {
@@ -940,7 +960,7 @@ class MangaTranslator {
         this.isEnabled &&
         img instanceof HTMLImageElement &&
         !img.closest('.manga-translator-minimal-loader') &&
-        !this.processedImages.has(img)
+        this.canProcessImage(img)
       ) {
         this.scheduleScan();
       }
@@ -1067,6 +1087,8 @@ class MangaTranslator {
       delete img.dataset.mtCacheKey;
     });
     this.processedImages.clear();
+    this.pendingImages.clear();
+    this.failedImages.clear();
     this.totalProcessed = 0;
   }
 }

@@ -46,15 +46,14 @@ const MangaTranslationCache = {
     const translator = (settings && settings.translator) || 'google';
     const direction = (settings && settings.readingDirection) || 'rtl';
     const page = this.normalizeUrlForKey(pageUrl, true);
-    const source = this.normalizeUrlForKey(originalSrc);
-    return `v3_${lang}_${translator}_${direction}_${page}_${imageIndex}_${source}`;
-  },
-
-  buildLegacyCacheKey(settings, originalSrc) {
-    const lang = (settings && settings.targetLang) || 'id';
-    const translator = (settings && settings.translator) || 'google';
-    const direction = (settings && settings.readingDirection) || 'rtl';
-    return `v2_${lang}_${translator}_${direction}_${originalSrc || ''}`;
+    const source = this.normalizeUrlForKey(originalSrc, true);
+    const detector = (settings && settings.detectorType) || 'hybrid';
+    const fontScale = (settings && settings.fontScale) ?? 1.0;
+    const allCaps = (settings && settings.allCaps) ?? true;
+    const apiUrl = (settings && settings.apiUrl) || 'http://127.0.0.1:8000';
+    // Do not reuse old keys: query-stripped URLs and failed OCR results may
+    // already have produced incorrect entries in earlier cache versions.
+    return `v4_${JSON.stringify([lang, translator, direction, detector, fontScale, allCaps, apiUrl, page, imageIndex, source])}`;
   },
 
   async getCachedTranslation(cacheKey) {

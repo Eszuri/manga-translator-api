@@ -152,7 +152,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000);
+        let timeoutId;
+        const resetStreamTimeout = () => {
+          clearTimeout(timeoutId);
+          timeoutId = setTimeout(() => controller.abort(), 60000);
+        };
+        resetStreamTimeout();
         
         try {
           const res = await fetch(url, {
@@ -179,6 +184,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
+            if (value && value.length) resetStreamTimeout();
             
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
@@ -189,6 +195,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               if (!trimmed) continue;
               try {
                 const data = JSON.parse(trimmed);
+                if (data.stage === 'heartbeat') continue;
                 if (data.stage === 'done') {
                   finalResult = {
                     success: true,

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from app.api.v1.image_uploads import read_validated_image
 from app.schemas import DetectBubblesResponse
 from app.core.gpu import require_gpu_device
+from app.core.image_worker import run_image_task
 from app.services.detector import sort_manga_reading_order
 from app.services.ocr_service import get_ocr_service
 
@@ -31,6 +32,16 @@ def get_detector_instance(detector_type: str, device: str):
             _hybrid_detector = HybridBubbleDetector(comic_detector=comic_det)
         return _hybrid_detector
     raise ValueError("GPU-only backend does not support the CPU contour detector.")
+
+
+def recognize_page(image, detector_type, device, reading_direction):
+    detector = get_detector_instance(detector_type, device)
+    bubbles = sort_manga_reading_order(detector.detect(image), reading_direction=reading_direction)
+    return get_ocr_service(device=device).recognize_all_bubbles(image, bubbles)
+
+
+def recognize_crop(image, device):
+    return get_ocr_service(device=device).recognize_crop(image)
 
 
 class CropOCRResponse(BaseModel):
@@ -65,12 +76,9 @@ async def recognize_page_text(
 
     start_time = time.perf_counter()
 
-    detector = get_detector_instance(detector_type, device)
-    detected = detector.detect(image)
-    ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
-
-    ocr_service = get_ocr_service(device=device)
-    ordered_bubbles = ocr_service.recognize_all_bubbles(image, ordered_bubbles)
+    ordered_bubbles = await run_image_task(
+        recognize_page, image, detector_type, device, reading_direction
+    )
 
     duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
@@ -99,8 +107,7 @@ async def recognize_crop_text(
     crop_img = await read_validated_image(file)
 
     start_time = time.perf_counter()
-    ocr_service = get_ocr_service(device=device)
-    text = ocr_service.recognize_crop(crop_img)
+    text = await run_image_task(recognize_crop, crop_img, device)
     duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
     return CropOCRResponse(

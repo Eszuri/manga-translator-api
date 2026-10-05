@@ -17,9 +17,10 @@ from app.schemas import (
 )
 from app.core.gpu import require_gpu_device
 from app.core.config import settings
+from app.core.image_worker import run_image_task, stream_with_heartbeats
 from app.services.detector import sort_manga_reading_order
 from app.services.ocr_service import get_ocr_service
-from app.services.translation_service import get_translation_service
+from app.services.translation_service import TranslationError, get_translation_service
 from app.services.inpainting_service import MangaInpaintingService
 from app.services.typesetting_service import MangaTypesettingService
 
@@ -45,6 +46,40 @@ def get_detector_instance(detector_type: str, device: str):
             _hybrid_detector = HybridBubbleDetector(comic_detector=comic_det)
         return _hybrid_detector
     raise ValueError("GPU-only backend does not support the CPU contour detector.")
+
+
+def detect_page(image, detector_type, device, reading_direction, include_seg=False):
+    detector = get_detector_instance(detector_type, device)
+    detected = detector.detect(image)
+    bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
+    seg_mask = None
+    if include_seg:
+        comic_det = getattr(detector, "comic_detector", detector)
+        if hasattr(comic_det, "detect_raw") and hasattr(comic_det, "get_unletterboxed_seg"):
+            _, seg, _, _, (dw, dh) = comic_det.detect_raw(image)
+            seg_mask = comic_det.get_unletterboxed_seg(seg, image.width, image.height, dw, dh)
+    return bubbles, seg_mask
+
+
+def recognize_bubbles(image, bubbles, device):
+    return get_ocr_service(device=device).recognize_all_bubbles(image, bubbles)
+
+
+def require_bubble_text(bubbles, translated=False):
+    field = "translation" if translated else "text"
+    missing = [str(b.id) for b in bubbles if not (getattr(b, field) or "").strip()]
+    if missing:
+        stage = "Translation" if translated else "OCR"
+        raise TranslationError(
+            f"{stage} returned empty text for bubble(s): {', '.join(missing)}. "
+            "The original image was not modified."
+        )
+
+
+def encode_image(image):
+    out_buf = io.BytesIO()
+    image.convert("RGB").save(out_buf, format="JPEG", quality=95)
+    return out_buf.getvalue()
 
 
 @router.post("/page", response_model=DetectBubblesResponse)
@@ -78,12 +113,10 @@ async def translate_manga_page(
 
     start_time = time.perf_counter()
 
-    detector = get_detector_instance(detector_type, device)
-    detected = detector.detect(image)
-    ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
-
-    ocr_service = get_ocr_service(device=device)
-    ordered_bubbles = ocr_service.recognize_all_bubbles(image, ordered_bubbles)
+    ordered_bubbles, _ = await run_image_task(
+        detect_page, image, detector_type, device, reading_direction
+    )
+    ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles, device)
 
     trans_service = get_translation_service()
     ordered_bubbles = await trans_service.translate_bubbles_async(ordered_bubbles, target_lang=target_lang)
@@ -189,43 +222,36 @@ async def inpaint_and_translate_manga_page(
 
     start_time = time.perf_counter()
 
-    detector = get_detector_instance(detector_type, device)
-    detected = detector.detect(image)
-    ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
-
-    seg_mask = None
-    if detector_type in ("hybrid", "comic_text_detector"):
-        comic_det = getattr(detector, "comic_detector", detector)
-        if hasattr(comic_det, "detect_raw") and hasattr(comic_det, "get_unletterboxed_seg"):
-            blk, seg, det, r, (dw, dh) = comic_det.detect_raw(image)
-            seg_mask = comic_det.get_unletterboxed_seg(seg, image.width, image.height, dw, dh)
+    ordered_bubbles, seg_mask = await run_image_task(
+        detect_page, image, detector_type, device, reading_direction, include_seg=True
+    )
 
     if typeset and ordered_bubbles:
-        ocr_service = get_ocr_service(device=device)
-        ordered_bubbles = ocr_service.recognize_all_bubbles(image, ordered_bubbles)
+        ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles, device)
+        require_bubble_text(ordered_bubbles)
 
         trans_service = get_translation_service()
         ordered_bubbles = await trans_service.translate_bubbles_async(
             ordered_bubbles, target_lang=target_lang, translator=translator
         )
+        require_bubble_text(ordered_bubbles, translated=True)
 
     inpaint_service = MangaInpaintingService()
-    inpainted_img = inpaint_service.inpaint(image, seg_mask=seg_mask, bubbles=ordered_bubbles)
+    inpainted_img = await run_image_task(
+        inpaint_service.inpaint, image, seg_mask=seg_mask, bubbles=ordered_bubbles
+    )
 
     if typeset and ordered_bubbles:
         typeset_service = MangaTypesettingService(all_caps=all_caps)
-        final_img = typeset_service.typeset(inpainted_img, ordered_bubbles, font_scale=font_scale)
+        final_img = await run_image_task(
+            typeset_service.typeset, inpainted_img, ordered_bubbles, font_scale=font_scale
+        )
     else:
         final_img = inpainted_img
 
     duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
-    if final_img.mode != "RGB":
-        final_img = final_img.convert("RGB")
-
-    out_buf = io.BytesIO()
-    final_img.save(out_buf, format="JPEG", quality=95)
-    img_bytes = out_buf.getvalue()
+    img_bytes = await run_image_task(encode_image, final_img)
 
     if return_format == "image":
         return Response(
@@ -299,16 +325,9 @@ async def inpaint_stream_manga_page(
             yield json.dumps({"stage": "detect", "message": "Detecting text bubbles..."}) + "\n"
             await asyncio.sleep(0.01)
 
-            detector = get_detector_instance(detector_type, device)
-            detected = detector.detect(image)
-            ordered_bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
-
-            seg_mask = None
-            if detector_type in ("hybrid", "comic_text_detector"):
-                comic_det = getattr(detector, "comic_detector", detector)
-                if hasattr(comic_det, "detect_raw") and hasattr(comic_det, "get_unletterboxed_seg"):
-                    blk, seg, det, r, (dw, dh) = comic_det.detect_raw(image)
-                    seg_mask = comic_det.get_unletterboxed_seg(seg, image.width, image.height, dw, dh)
+            ordered_bubbles, seg_mask = await run_image_task(
+                detect_page, image, detector_type, device, reading_direction, include_seg=True
+            )
 
             if typeset and ordered_bubbles:
                 yield json.dumps({
@@ -318,8 +337,8 @@ async def inpaint_stream_manga_page(
                 }) + "\n"
                 await asyncio.sleep(0.01)
 
-                ocr_service = get_ocr_service(device=device)
-                ordered_bubbles = ocr_service.recognize_all_bubbles(image, ordered_bubbles)
+                ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles, device)
+                require_bubble_text(ordered_bubbles)
 
                 yield json.dumps({
                     "stage": "translate",
@@ -332,6 +351,7 @@ async def inpaint_stream_manga_page(
                 ordered_bubbles = await trans_service.translate_bubbles_async(
                     ordered_bubbles, target_lang=target_lang, translator=translator
                 )
+                require_bubble_text(ordered_bubbles, translated=True)
             else:
                 yield json.dumps({
                     "stage": "ocr",
@@ -344,23 +364,23 @@ async def inpaint_stream_manga_page(
             await asyncio.sleep(0.01)
 
             inpaint_service = MangaInpaintingService()
-            inpainted_img = inpaint_service.inpaint(image, seg_mask=seg_mask, bubbles=ordered_bubbles)
+            inpainted_img = await run_image_task(
+                inpaint_service.inpaint, image, seg_mask=seg_mask, bubbles=ordered_bubbles
+            )
 
             yield json.dumps({"stage": "render", "message": "Rendering and typesetting text..."}) + "\n"
             await asyncio.sleep(0.01)
 
             if typeset and ordered_bubbles:
                 typeset_service = MangaTypesettingService(all_caps=all_caps)
-                final_img = typeset_service.typeset(inpainted_img, ordered_bubbles, font_scale=font_scale)
+                final_img = await run_image_task(
+                    typeset_service.typeset, inpainted_img, ordered_bubbles, font_scale=font_scale
+                )
             else:
                 final_img = inpainted_img
 
-            if final_img.mode != "RGB":
-                final_img = final_img.convert("RGB")
-
-            out_buf = io.BytesIO()
-            final_img.save(out_buf, format="JPEG", quality=95)
-            img_b64 = base64.b64encode(out_buf.getvalue()).decode("utf-8")
+            img_bytes = await run_image_task(encode_image, final_img)
+            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
             duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
             yield json.dumps({
@@ -374,4 +394,6 @@ async def inpaint_stream_manga_page(
         except Exception as e:
             yield json.dumps({"stage": "error", "message": str(e)}) + "\n"
 
-    return StreamingResponse(stream_generator(), media_type="application/x-ndjson")
+    return StreamingResponse(
+        stream_with_heartbeats(stream_generator()), media_type="application/x-ndjson"
+    )

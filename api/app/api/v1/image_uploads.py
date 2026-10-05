@@ -5,6 +5,7 @@ import warnings
 
 from fastapi import HTTPException, UploadFile, status
 from PIL import Image, UnidentifiedImageError
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 
@@ -28,7 +29,7 @@ async def read_validated_image(file: UploadFile) -> Image.Image:
             detail="Unsupported upload content type. Use JPEG, PNG, or WebP.",
         )
 
-    contents = await file.read()
+    contents = await file.read(settings.MAX_UPLOAD_BYTES + 1)
     if not contents:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -40,6 +41,12 @@ async def read_validated_image(file: UploadFile) -> Image.Image:
             detail="Uploaded image exceeds the configured size limit.",
         )
 
+    # Decoding does not use ONNX; it must not wait behind a long GPU task before
+    # a streaming response can start and send queue/processing heartbeats.
+    return await run_in_threadpool(decode_validated_image, contents)
+
+
+def decode_validated_image(contents: bytes) -> Image.Image:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
