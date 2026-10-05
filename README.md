@@ -2,9 +2,9 @@
 
 Backend FastAPI dan extension browser untuk mendeteksi teks manga, menjalankan
 OCR Jepang, menerjemahkan dialog, menghapus teks asli, dan render teks hasil
-terjemahan pada gambar. <b>Project ini harus memiliki GPU pada komputer</b>
+terjemahan pada gambar. <b>Project ini harus memiliki GPU pada komputer</b>.
 
-## Struktur project
+## Struktur Project
 
 ```text
 api/
@@ -13,35 +13,33 @@ api/
     core/                Konfigurasi dan kebijakan GPU
     services/            Deteksi, OCR, terjemahan, inpainting, dan penataan teks
     assets/fonts/        Font untuk hasil render
-  tools/                 Runner server dan builder gambar
-  requirements/          Dependency server lokal dan GUI
+  tools/                 Runner server dan builder gambar lokal
+  requirements/          Dependency server lokal
   Images/
     original Images/     Gambar manga asli
     build Images/        Hasil build manga translator
   .env.example           sample environment
-  .env                   konfigurasi API, dan kawan kawan
+  .env                   konfigurasi API
 extension/               Source extension browser
-server_gui/              Antarmuka kontrol server Windows
 models/                  Model deteksi dan OCR lokal
-assets/branding/         icon extension
+assets/branding/         Icon extension
 docs/                    Dokumentasi
 scripts/
   process-images.bat     Proses gambar dari api/Images/original Images
   build-extension.bat    Build extension
-  start-server.bat       Start server lokal lewat CLI
-dist/                    Paket server dan extension
+  start-server.bat       Start server lokal
+dist/                    Paket hasil build extension
 ```
 
 ## Shortcut Windows
 
-
 | Keperluan | File |
 | --- | --- |
-| Build extension | `scripts\build-extension.bat` |
 | Server lokal Windows | `scripts\start-server.bat` |
 | Proses gambar lokal | `scripts\process-images.bat` |
+| Build extension | `scripts\build-extension.bat` |
 
-## Menjalankan backend
+## Menjalankan Backend
 
 Siapkan `api/.env`, model, dan environment `.venv-gpu` terlebih dahulu. Jalankan
 server dari terminal:
@@ -50,62 +48,54 @@ server dari terminal:
 scripts\start-server.bat
 ```
 
-Untuk kontrol melalui GUI, jalankan langsung
-`dist\MangaTranslatorServer\MangaTranslatorServer.exe`, lalu tekan **Start server**.
-GUI tidak menyalakan server secara otomatis.
-
 Periksa API:
 
 ```powershell
 http://127.0.0.1:8000/api/v1/health
 ```
 
-Dokumentasi endpoint tersedia di `http://127.0.0.1:8000/docs`.
+Dokumentasi endpoint interaktif tersedia di `http://127.0.0.1:8000/docs`.
 
-## Memasang extension
+## Memasang Extension Browser
 
 1. Buka `chrome://extensions` atau `edge://extensions`.
-2. Aktifkan mode pengembang atau mode developer.
-3. Pilih load extension yang belum dikemas, lalu pilih folder `extension`.
+2. Aktifkan mode pengembang (*Developer mode*).
+3. Pilih **Load unpacked** (muat ekstensi yang belum dikemas), lalu pilih folder `extension`.
 4. Isi kolom `Server` pada popup, misalnya `http://127.0.0.1:8000`.
 5. Pilih Google Translate atau LLM API, bahasa tujuan, dan arah baca.
-6. Aktifkan manga translator untuk domain halaman yang sedang dibuka (default false). 
+6. Aktifkan manga translator untuk domain halaman yang sedang dibuka.
 
-
-
-Untuk build extension (.crx / .zip):
+Untuk mem-build extension (.crx / .zip):
 
 ```powershell
 scripts\build-extension.bat
 ```
 
 Script memakai PowerShell bawaan Windows; Python tidak diperlukan untuk build extension.
-CRX dibuat jika browser Chromium (Chrome, Edge, atau Brave) ditemukan.
- Hasil berada di `dist`.
+CRX dibuat otomatis jika browser Chromium (Chrome, Edge, atau Brave) ditemukan. Hasil berada di `dist`.
 
-## bagaimana gambar diproses
+## Bagaimana Gambar Diproses
 
-- Gambar akan diproses ketika sudah terload semua gambar yg ada pada web dan memiliki dimensi asli minimal 500 × 700 piksel.
-- Maksimal dua gambar yg diproses oleh manga translator per halaman web.
-2 proses tersebut bergantian sampai semua gambar terselesaikan oleh manga translator di halaman web.
-- Gambar dalam viewport diprioritaskan. Gambar di luar viewport tetap diproses
-  setelah antrean prioritas viewport
+- Gambar akan diproses ketika semua gambar pada web telah selesai dimuat dan memiliki dimensi asli minimal 500 × 700 piksel.
+- Maksimal dua gambar yang diproses secara paralel per halaman web.
+- Proses dilakukan bergantian sampai semua gambar pada halaman terselesaikan.
+- Gambar dalam viewport diprioritaskan. Gambar di luar viewport tetap diproses setelah antrean prioritas viewport selesai.
 - Hasil disimpan dalam IndexedDB browser dan dapat digunakan kembali saat refresh tanpa harus translate ulang.
 
-## pemrosesan GPU
+## Pemrosesan GPU
 
-Inferensi model deteksi dan OCR wajib memakai DirectML pada Windows lokal.
+Inferensi model deteksi dan OCR wajib memakai DirectML (`DmlExecutionProvider`) atau CUDA (`CUDAExecutionProvider`) pada Windows lokal.
 
-pipeline yg tidak berjalan di GPU: decoding gambar, pengolahan mask,
-inpainting OpenCV Telea, penataan teks, dan beberapa node kontrol/shape ONNX
-tetap memakai CPU.
+Pipeline yang berjalan di CPU:
+- Decoding gambar
+- Pengolahan mask geometri
+- Inpainting OpenCV Telea
+- Penataan teks (typesetting)
+- Node kontrol/shape ONNX tertentu
 
-OCR yang digunakan ditujukan untuk teks Jepang. Bahasa selain jepang mungkin tidak berfungsi sepenuhnya
+> **Catatan:** OCR yang digunakan ditujukan untuk teks Jepang. Bahasa selain Jepang tidak didukung secara optimal.
 
-
-
-
-## Persiapan lokal
+## Persiapan Lingkungan Lokal
 
 Gunakan Python 3.11. Jika `.venv-gpu` belum ada:
 
@@ -114,118 +104,75 @@ py -3.11 -m venv .venv-gpu
 .\.venv-gpu\Scripts\python.exe -m pip install -r api\requirements\local.txt
 ```
 
-Salin `api/.env.example` ke `api/.env` jika belum ada.
-Model di `models` harus berisi `comic-text-detector.onnx` dan folder
-`manga-ocr` dengan encoder, decoder, tokenizer, serta konfigurasi OCR.
+Salin `api/.env.example` ke `api/.env` jika belum ada:
 
-## Build gambar lokal
+```powershell
+copy api\.env.example api\.env
+```
 
-Masukkan JPEG, PNG, atau WebP ke `api/Images/original Images`. Contoh satu gambar pertama:
+Folder `models` harus berisi:
+- `comic-text-detector.onnx`
+- Folder `manga-ocr` berisi encoder, decoder, tokenizer, serta file konfigurasi model.
+
+## Build Gambar Lokal
+
+Masukkan JPEG, PNG, atau WebP ke `api/Images/original Images`. Contoh memproses satu gambar:
 
 ```powershell
 scripts\process-images.bat --limit 1
 ```
 
-Gunakan `--image "nama.jpg"` untuk memilih file tertentu.
-Script berhenti jika folder sumber belum ada atau tidak berisi JPEG, PNG, atau WebP.
-Build memakai Google Translate dan arah baca kanan ke kiri.
-Hasil ada di `api/Images/build Images`: `Box`, `Text Box`, `OCR`,
-`translate`, `inpainting`, dan `render`. Build ulang menimpa hasil dengan nama sama.
+Gunakan opsi `--image "nama.jpg"` untuk memilih file tertentu:
+
+```powershell
+scripts\process-images.bat --image "001.jpg"
+```
+
+Hasil proses akan tersimpan di `api/Images/build Images`: `Box`, `Text Box`, `OCR`, `translate`, `inpainting`, dan `render`.
 
 ## Pengaturan API
 
-Edit `api/.env`:
+Edit file `api/.env`:
 
 | Pengaturan | Fungsi |
 | --- | --- |
-| `API_HOST` | `127.0.0.1` agar API hanya bisa diakses dari PC server; `0.0.0.0` agar perangkat lain juga bisa mengaksesnya |
+| `API_HOST` | `127.0.0.1` agar API hanya bisa diakses dari PC server; `0.0.0.0` agar perangkat lain di jaringan lokal dapat mengakses |
 | `API_PORT` | Port server lokal, default `8000` |
-| `API_RELOAD` | `True` agar server lokal restart otomatis saat kode berubah |
-| `LLM_API_KEY` | Kunci layanan LLM; Google Translate tidak memerlukannya |
-| `LLM_BASE_URL` | Alamat layanan LLM, misalnya `http://127.0.0.1:11434/v1` untuk Ollama pada PC yang sama |
-| `LLM_MODEL` | ID model yang tersedia pada layanan |
+| `API_RELOAD` | `True` agar server otomatis restart saat kode berubah (development) |
+| `LLM_API_KEY` | Kunci API layanan LLM; kosongkan jika menggunakan Google Translate atau Ollama lokal |
+| `LLM_BASE_URL` | Alamat endpoint LLM, misalnya `http://127.0.0.1:11434/v1` untuk Ollama pada PC yang sama |
+| `LLM_MODEL` | Model ID yang digunakan, contoh: `qwen2.5:3b` atau `gpt-4o-mini` |
+| `LLM_TIMEOUT_SECONDS` | Batas waktu tunggu respons LLM dalam detik (default: `30.0`) |
+| `DEFAULT_TRANSLATOR` | Penerjemah bawaan: `google` atau `llm` |
 
-
-
-Contoh Ollama pada PC:
+Contoh Ollama lokal:
 
 ```dotenv
 LLM_API_KEY=
 LLM_BASE_URL=http://127.0.0.1:11434/v1
 LLM_MODEL=qwen2.5:3b
+DEFAULT_TRANSLATOR=llm
 ```
 
-Backend mengakses Ollama pada PC yang sama melalui `127.0.0.1`.
-Kunci API boleh kosong untuk layanan pada `localhost`, `127.0.0.1`, atau `::1`.
+### Akses dari Perangkat Lain (LAN / Tailscale)
 
-### Akses dari perangkat lain
+- Jika perangkat berada di jaringan Wi-Fi/LAN yang sama: gunakan `http://IP-PC:8000` (atur `API_HOST=0.0.0.0`).
+- Jika berada di jaringan berbeda: hubungkan kedua perangkat melalui Tailscale, lalu gunakan `http://IP-TAILSCALE-PC:8000`.
+- Pastikan Windows Firewall mengizinkan koneksi masuk pada port yang ditentukan (default `8000`).
 
-- Jika perangkat berada di jaringan yang sama, gunakan `http://IP-PC:8000`.
-  Ganti `IP-PC` dengan alamat IP komputer yang menjalankan API.
-- Jika berada di jaringan berbeda, hubungkan kedua perangkat melalui Tailscale,
-  lalu gunakan `http://IP-TAILSCALE-PC:8000`.
-- Jangan memakai `127.0.0.1` untuk mengakses PC lain. Alamat ini berarti perangkat
-  yang sedang digunakan.
+## Troubleshooting / Pesan Error
 
-Untuk memeriksa koneksi, buka `http://IP-PC:8000/api/v1/health` dari perangkat lain.
-Jika memakai Tailscale, gunakan IP Tailscale PC pada alamat tersebut.
-Pastikan firewall PC mengizinkan koneksi ke port API. 
+Baca log pada terminal tempat server dijalankan:
 
-## Setelah mengubah kode atau pengaturan konfigurasi
-
-- Server lokal: perubahan kode otomatis diterapkan jika `API_RELOAD=True`; setelah `.env` berubah, restart server.
-- GUI dari source: restart aplikasi setelah kode atau dependency berubah. Setelah pengaturan GUI berubah, restart server melalui GUI.
-
-
-## Jika terjadi error
-
-Untuk server lokal, baca pesan pada terminal. Untuk GUI, buka tab **Logs**.
-
-
-| Pesan yang muncul | Arti dan tindakan |
+| Pesan yang Muncul | Arti dan Solusi |
 | --- | --- |
-| `Required GPU provider ... is unavailable` atau `GPU-only backend requires ...` | Provider GPU yang dibutuhkan tidak tersedia. Periksa `Available providers`; server Windows memerlukan `DmlExecutionProvider` |
-| `failed to activate ... Active providers: ...` | Sesi model gagal mengaktifkan provider GPU yang diminta. Baca error pemuatan ONNX sebelumnya pada log.|
-| `Missing model files ...` | File yang disebut setelah pesan ini tidak ditemukan pada folder model yang dipilih. Cocokkan daftar tersebut dengan file di `models` atau folder pada pengaturan GUI |
-| HTTP `422` | API menolak parameter. `detail.loc` menunjukkan parameter yang salah dan `detail.msg` menjelaskan alasannya. Contoh: `body.file: Field required` berarti file tidak terkirim; `body.device: Input should be 'gpu'` berarti nilai perangkat ditolak |
-| `LLM is not configured` | Pemeriksaan konfigurasi LLM gagal. Untuk layanan yang membutuhkan kunci, isi `LLM_API_KEY`. atau isi .env ada yg salah|
-| `Cannot connect to the LLM endpoint` | Backend gagal membuat koneksi ke layanan LLM. Periksa `LLM_BASE_URL` dan pastikan layanan LLM berjalan |
-| `LLM request timed out after ...s` | Panggilan LLM melewati batas waktu yang diatur oleh `LLM_TIMEOUT_SECONDS`. Ini berbeda dari timeout extension |
-| `LLM did not return a valid translation for bubble ...` | Hasil LLM tidak memuat terjemahan yang tidak kosong untuk ID dialog tersebut. Respons harus berisi ID dan teks terjemahan untuk setiap dialog atau kemungkinan menggunakan gambar yg bukan bahasa jepang|
-| `Google Translate failed (HTTP 429)` | Google membatasi permintaan. Ini bukan error API key LLM |
-| `Google Translate returned an unexpected number of results` | Jumlah hasil Google tidak sama dengan jumlah dialog yang dikirim. Backend menolak hasil tersebut agar dialog tidak tertukar |
-| `Request timed out ...` pada extension | Extension membatalkan request setelah 30 detik, atau 60 detik untuk stream. Pesan ini tidak membuktikan server mati atau sibuk; lihat log backend untuk mengetahui tahap terakhir |
-
-Pada respons stream, `stage=error` berarti proses gagal meskipun HTTP tetap 200.
-
-
-<center><b>Selamat Mencoba</b></center>
-
-## GUI server Windows
-
-Jalankan GUI yang sudah dipaketkan dari `dist/MangaTranslatorServer/MangaTranslatorServer.exe`.
-Folder `_internal` harus tetap berada di sebelah executable. Paket ini tidak ikut
-berubah ketika kode source diedit.
-
-Untuk menjalankan GUI langsung dari source:
-
-```powershell
-Push-Location api
-..\.venv-gpu\Scripts\python.exe -m tools.run_gui
-Pop-Location
-```
-
-Instal `api/requirements/gui.txt` ke `.venv-gpu` lebih dulu jika PySide6 belum tersedia.
-
-Paket menyertakan Python dan dependency server; PC tujuan tidak perlu memasang Python secara terpisah.
-Model ONNX, gambar, `.env`, dan kunci API tidak ikut dipaketkan. Model tetap diperlukan:
-pilih folder `models` di root proyek melalui **Settings**, atau salin isinya ke folder `models` di sebelah executable.
-Model tidak diunduh otomatis. GPU dengan dukungan DirectX 12 dan driver yang sesuai tetap diperlukan.
-
-GUI dibuka dengan server berhenti. Tekan **Start server** untuk menjalankannya. **Stop** saat pemuatan model membatalkan startup; **Force stop** menghentikan proses yang belum selesai ditutup. Tombol hanya mengontrol server milik GUI.
-Jika port sudah dipakai proses lain, hentikan proses tersebut atau ubah **API port** pada GUI.
-
-GUI tidak membaca atau mengubah `api/.env`. Atur LLM dan akses perangkat lain melalui **Settings**.
-Google Translate memerlukan internet; LLM memerlukan layanan dan model yang sudah tersedia.
-Pengaturan dan log disimpan di `%LOCALAPPDATA%\MangaTranslatorServer`; kunci API dilindungi Windows DPAPI.
-Akses jaringan mati secara default. Aktifkan **Network** jika diperlukan; izin firewall tetap diatur sendiri.
+| `Required GPU provider ... is unavailable` | Provider GPU tidak ditemukan. Pastikan GPU mendukung DirectX 12 dan paket `onnxruntime-directml` terinstal. |
+| `failed to activate ... Active providers: ...` | Sesi model ONNX gagal mengaktifkan GPU execution provider. Periksa log startup terminal. |
+| `Missing model files ...` | File model ONNX di folder `models/` belum lengkap atau kosong. |
+| HTTP `422` | Permintaan ditolak karena validasi parameter gagal. Periksa kembali form data yang dikirimkan. |
+| `LLM is not configured` | Kunci API kosong untuk provider remote. Isi `LLM_API_KEY` di `api/.env`. |
+| `Cannot connect to the LLM endpoint` | Server gagal menghubungi `LLM_BASE_URL`. Pastikan instance Ollama/LLM sudah menyala. |
+| `LLM request timed out after ...s` | Panggilan LLM melewati batas waktu. Naikkan `LLM_TIMEOUT_SECONDS` di `api/.env`. |
+| `LLM did not return a valid translation for bubble ...` | LLM tidak mengembalikan terjemahan untuk ID balon tersebut. Coba gunakan Google Translate atau model LLM lain. |
+| `Google Translate failed (HTTP 429)` | Google membatasi jumlah request (rate limit). Tunggu beberapa saat atau beralih ke LLM. |
+| `Request timed out ...` pada extension | Extension membatalkan request setelah timeout. Periksa beban GPU di log server. |

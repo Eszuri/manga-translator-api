@@ -1,2 +1,0 @@
-# Desktop runtime; install alongside local.txt for source development.
-PySide6-Essentials==6.11.2

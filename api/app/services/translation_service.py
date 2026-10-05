@@ -266,9 +266,9 @@ class MangaTranslationService:
     ) -> Dict[int, str]:
         """Asynchronous HTTP call to the OpenAI-compatible endpoint."""
         if not self.model.strip():
-            raise TranslationError("LLM model ID is empty. Set the model ID in GUI Settings > Translation or LLM_MODEL for the command-line server.")
+            raise TranslationError("LLM model ID is empty. Set LLM_MODEL in api/.env.")
         if not self.is_configured():
-            raise TranslationError("The LLM endpoint requires an API key. Set it in GUI Settings > Translation or LLM_API_KEY for the command-line server.")
+            raise TranslationError("The LLM endpoint requires an API key. Set LLM_API_KEY in api/.env.")
 
         url = f"{self.base_url}/chat/completions"
         headers = {
