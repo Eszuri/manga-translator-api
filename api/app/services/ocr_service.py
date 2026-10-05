@@ -8,7 +8,8 @@ from PIL import Image, ImageDraw
 import numpy as np
 import onnxruntime as ort
 import jaconv
-from transformers import ViTImageProcessorPil as ViTImageProcessor, BertJapaneseTokenizer
+from transformers.models.vit.image_processing_pil_vit import ViTImageProcessorPil as ViTImageProcessor
+from transformers.models.bert_japanese.tokenization_bert_japanese import BertJapaneseTokenizer
 
 from app.schemas import DetectedBubble
 from app.core.gpu import configure_gpu_session, require_gpu_device, verify_gpu_session
