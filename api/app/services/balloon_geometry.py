@@ -52,9 +52,7 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
         return [original]
     sizes = [stats[i, cv2.CC_STAT_HEIGHT] for i in glyphs
              if 4 <= stats[i, cv2.CC_STAT_HEIGHT] <= max(16, text.height * 0.2)]
-    # Furigana and punctuation are much smaller than the main glyphs.
     char_height = float(np.percentile(sizes, 80)) if sizes else max(4, text.height / 15)
-    # Discard long outlines that the segmentation network occasionally touches.
     clean = np.zeros_like(support)
     for i in glyphs:
         _, _, w, h, area = stats[i]
@@ -68,9 +66,6 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
         return [BoundingBox(x=text.x + int(xx.min()), y=text.y + int(yy.min()),
                             width=int(xx.max() - xx.min() + 1), height=int(yy.max() - yy.min() + 1))]
 
-    # One neural rectangle can cover two staggered balloons. Look for a real
-    # horizontal gap in the glyph support and a change in the text's x centre.
-    # Ordinary pauses/punctuation in a single vertical column retain their box.
     row_ink = clean.sum(axis=1)
     quiet = row_ink <= max(2, round(text.width * 0.015))
     edges = np.flatnonzero(np.diff(np.r_[False, quiet, False]))
@@ -96,8 +91,6 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
         result = []
         for part in (clean[:split[0]], clean[split[1]:]):
             offset_y = 0 if not result else split[1]
-            # A sparse sound effect beside the dialogue must not expand its OCR
-            # crop into a panel. Keep the dominant x band when clearly larger.
             cols = part.sum(axis=0)
             low = cols <= 2
             bounds = np.flatnonzero(np.diff(np.r_[False, low, False]))
@@ -132,8 +125,6 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
         boxes.append(BoundingBox(x=text.x + int(xx.min()), y=text.y + int(yy.min()),
                                   width=int(xx.max() - xx.min() + 1), height=int(yy.max() - yy.min() + 1)))
     groups = []
-    # Restore interrupted runs in the same vertical column before grouping
-    # neighbouring columns. A punctuation gap must not create a new dialogue.
     merged = True
     while merged:
         merged = False
@@ -160,7 +151,6 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
         else:
             groups.append([box])
     envelopes = [union_boxes(g) for g in groups]
-    # Tiny punctuation belongs with the nearest group, not its own OCR request.
     large = [b for b in envelopes if b.height >= max(2 * char_height, text.height * 0.18)]
     if not large:
         return [original]
@@ -191,7 +181,6 @@ def safe_layout_box(mask: np.ndarray, origin: Tuple[int, int], text: BoundingBox
     gh, gw = h // step, w // step
     if not gh or not gw:
         return None
-    # Every original pixel of an accepted cell must be interior.
     grid = safe[:gh * step, :gw * step].reshape(gh, step, gw, step).min(axis=(1, 3)) > 0
     anchor_x = (text.center_x - origin[0]) / step
     anchor_y = (text.center_y - origin[1]) / step
@@ -234,13 +223,9 @@ class BalloonRegions:
         self.text_boxes = text_boxes or []
         self.levels = []
         ink = (gray <= white_threshold).astype(np.uint8)
-        # Remove known text only in the geometry probe. Otherwise closing joins
-        # glyphs to outlines, making the balloon contour cut through the dialogue.
         for text in text_boxes or []:
             box = clip_box(text, self.w, self.h)
             if box is not None:
-                # Include antialiasing just beyond the neural glyph envelope;
-                # otherwise a question-mark dot can become part of the outline.
                 pad = max(2, round(max(self.w, self.h) * 0.002))
                 ink[max(0, box.y - pad):min(self.h, box.bottom + pad),
                     max(0, box.x - pad):min(self.w, box.right + pad)] = 0
@@ -280,7 +265,6 @@ class BalloonRegions:
     def mask(self, match):
         level, label, (x, y, w, h) = match
         mask = (self.levels[level][0][y:y + h, x:x + w] == label).astype(np.uint8)
-        # Fill glyph holes but keep the outside contour and concave balloon shape.
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(mask, contours, -1, 1, cv2.FILLED)
         return mask

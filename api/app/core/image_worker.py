@@ -9,8 +9,6 @@ from app.core.request_limits import current_image_request
 from app.core.config import settings
 
 
-# A single worker prevents concurrent Run calls on shared DirectML sessions.
-# Cancelling an HTTP request cannot release the worker while inference still runs.
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="image-worker")
 _decode_executor = ThreadPoolExecutor(
     max_workers=settings.MAX_IMAGE_REQUESTS, thread_name_prefix="image-decode"

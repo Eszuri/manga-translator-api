@@ -18,8 +18,6 @@ def sort_manga_reading_order(
     if not bubbles:
         return []
 
-    # Cluster overlapping vertical extents instead of arbitrary fixed-height
-    # bins, which could put a lower panel before a tall dialogue above it.
     rows = []
     for bubble in sorted(bubbles, key=lambda b: b.bounding_box.y):
         box = bubble.bounding_box

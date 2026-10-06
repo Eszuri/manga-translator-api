@@ -45,7 +45,6 @@ class MangaInpaintingService:
         gray = (cv2.cvtColor(source_image, cv2.COLOR_RGB2GRAY)
                 if source_image is not None and source_image.ndim == 3 else source_image)
 
-        # Neural segmentation is evidence, not permission to erase the entire page.
         if seg_mask is not None:
             char_mask = (seg_mask > self.mask_threshold).astype(np.uint8) * 255
             if char_mask.shape != (orig_h, orig_w):
@@ -68,8 +67,6 @@ class MangaInpaintingService:
                     allowed[ty1:ty2, tx1:tx2] |= local_allowed
                     patch = char_mask[ty1:ty2, tx1:tx2].copy()
                     if gray is not None:
-                        # Recover complete glyph strokes (including furigana), but
-                        # reject outlines/art connected to the crop boundary.
                         ink = (gray[ty1:ty2, tx1:tx2] < 190).astype(np.uint8)
                         count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
                         evidence = cv2.dilate(patch, np.ones((3, 3), np.uint8))
@@ -85,13 +82,8 @@ class MangaInpaintingService:
                             if has_evidence and not np.any(evidence[component]):
                                 continue
                             patch[component] = 255
-                    # Never use a solid rectangular fallback: that erases artwork.
                     final_mask[ty1:ty2, tx1:tx2] |= patch & local_allowed
 
-                # The neural text envelope can omit whole Japanese columns. In a
-                # genuinely white balloon, the inner polygon itself is a safer
-                # erasure boundary than an incomplete envelope. Do not apply this
-                # to scenery, shaded captions, or graphic lettering.
                 if b.bubble_polygon and gray is not None:
                     polygon = np.asarray(b.bubble_polygon, np.int32)
                     px, py, pw, ph = cv2.boundingRect(polygon)
@@ -111,8 +103,6 @@ class MangaInpaintingService:
                     white_fraction = np.mean(crop_gray[inner != 0] > 215)
                     if white_fraction < 0.72:
                         continue
-                    # All dark glyph cores in this white interior are text; the
-                    # polygon inset protects the drawn balloon outline.
                     extra = ((crop_gray < 185) & (inner != 0)).astype(np.uint8) * 255
                     final_mask[py1:py2, px1:px2] |= extra
                     allowed[py1:py2, px1:px2] |= inner
@@ -154,9 +144,6 @@ class MangaInpaintingService:
             flags=self.inpaint_method
         )
         inpainted_rgb = cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB)
-        # In an almost-white balloon the paper is the background. A solid
-        # interior is more faithful than Telea's grey/black echoes around the
-        # many tightly packed Japanese strokes. Preserve an inset outline.
         if bubbles:
             gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
             for bubble in bubbles:

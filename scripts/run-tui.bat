@@ -8,7 +8,7 @@ set "PYTHONUTF8=1"
 pushd "%~dp0\.." || exit /b 1
 
 if not exist ".venv\Scripts\python.exe" (
-    echo [ERROR] Lingkungan .venv tidak ditemukan.
+    echo [ERROR] .venv environment not found.
     pause
     exit /b 1
 )

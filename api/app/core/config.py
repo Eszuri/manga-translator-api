@@ -27,7 +27,7 @@ def llm_base_url() -> str:
     parsed = urlsplit(value)
     if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment:
         raise ValueError("LLM_BASE_URL must be an HTTP(S) API base URL without a query or fragment.")
-    parsed.port  # Reject invalid port numbers before the first translation.
+    parsed.port
     return value
 
 

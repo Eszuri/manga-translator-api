@@ -141,7 +141,6 @@ class MangaTranslator {
 
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === 'sync') {
-        // Cancel immediately in every open tab, without waiting for storage.get.
         if (changes.enabledDomains &&
             !(changes.enabledDomains.newValue || []).includes(window.location.hostname)) {
           this.setSiteEnabled(false);
@@ -405,7 +404,6 @@ class MangaTranslator {
 
   restoreImageSource(img) {
     const state = this.responsiveImageStates.get(img);
-    // Do not overwrite a source that the web page changed independently.
     if (this.hasTranslatedImageSource(img, state)) {
       const restoreAttributes = (element, attributes) => attributes.forEach(([name, value]) => {
         if (value === null) element.removeAttribute(name);
@@ -506,8 +504,6 @@ class MangaTranslator {
       this.restoredImageSources.delete(img);
     }
     const failure = this.failedImages.get(img);
-    // Avoid retry loops caused by our own DOM changes. Alt+T retries failures
-    // immediately; later automatic scans can retry after the cooldown.
     return !failure || failure.source !== this.getCurrentImageSource(img) ||
       Date.now() - failure.timestamp >= 30000;
   }

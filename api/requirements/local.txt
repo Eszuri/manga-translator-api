@@ -1,7 +1,5 @@
 -r base.txt
-# Local Windows runtime: DirectX 12 / DirectML GPU acceleration.
 onnxruntime-directml==1.24.4
-# Manga OCR (ViT + RoBERTa Transformer)
 transformers==5.17.0
 sentencepiece>=0.2.0
 jaconv>=0.3.4

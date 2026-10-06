@@ -117,9 +117,6 @@ class MangaTypesettingService:
             if line_w <= max_width:
                 current_line.append(word)
             elif not current_line:
-                # A URL, name, or OCR artefact can be wider than the entire
-                # bubble. Break it at character boundaries instead of drawing
-                # an overflowing single-word line.
                 fragments = split_long_word(word) if break_long_words else [word]
                 lines.extend(fragments[:-1])
                 current_line = fragments[-1:]
@@ -137,8 +134,6 @@ class MangaTypesettingService:
         if current_line:
             lines.append(" ".join(current_line))
 
-        # Balance a one-word final line only when the result still fits. The old
-        # unconditional move could produce a wider final line than max_width.
         if len(lines) >= 2 and len(lines[-1].split()) == 1:
             prev_words = lines[-2].split()
             if len(prev_words) >= 3:
@@ -190,9 +185,6 @@ class MangaTypesettingService:
         Uses binary search to find the largest font size where the wrapped text
         comfortably fits inside target dimensions.
         """
-        # A short sentence in a large balloon should not become display-sized
-        # text merely because it fits. Keep it in the same visual range as
-        # neighbouring dialogue and cap narrow balloons more conservatively.
         page_cap = 28 * page_scale * font_scale
         width_cap = max(12 * page_scale, target_w * 0.25) * font_scale
         max_size = max(1, min(target_h, int(page_cap), int(width_cap)))
@@ -236,7 +228,6 @@ class MangaTypesettingService:
         output_img = image.copy()
         draw = ImageDraw.Draw(output_img)
 
-        # Using only the long side inflates dialogue on unusually tall pages.
         page_scale = min(image.width / 900.0, image.height / 1200.0)
 
         for bubble in bubbles:
@@ -247,14 +238,10 @@ class MangaTypesettingService:
             if self.all_caps:
                 text = text.upper()
 
-            # Target speech balloon boundary. Text is later rendered onto a
-            # cropped overlay, so a detector outlier cannot paint into a panel
-            # or character outside this safe inner rectangle.
             bbox = bubble.layout_box or bubble.text_box or bubble.bounding_box
             bw = bbox.width
             bh = bbox.height
 
-            # Adaptive padding: tall/spiky bubbles need extra horizontal safety margin
             aspect = bh / max(1.0, float(bw))
             pad_x_ratio = 0.06 if bubble.layout_box else (0.28 if aspect > 1.3 else self.padding_ratio)
             pad_y_ratio = 0.06 if bubble.layout_box else self.padding_ratio
@@ -272,9 +259,6 @@ class MangaTypesettingService:
             target_w = content_right - content_left
             target_h = content_bottom - content_top
 
-            # Regions without a balloon polygon are often narration printed
-            # directly over panel art. Use a smaller caption scale there so
-            # a large detector rectangle cannot turn prose into a headline.
             region_font_scale = font_scale * (0.65 if not bubble.bubble_polygon else 1.0)
             font, lines, line_heights, spacing = self.find_optimal_font_and_lines(
                 text=text,
@@ -288,9 +272,6 @@ class MangaTypesettingService:
             if not lines:
                 raise TypesettingError(f'Bubble {bubble.id}: text does not fit the render region without truncation.')
 
-            # Render in a local transparent layer. Its boundaries enforce the
-            # safe rectangle even in the rare case that a final glyph/stroke
-            # exceeds the measured text box by a pixel.
             text_layer = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
             text_draw = ImageDraw.Draw(text_layer)
 

@@ -28,7 +28,7 @@ def letterbox(
     using neutral gray padding (YOLO/Vision standard).
     Returns: (letterboxed_image, scale_ratio, (dw, dh))
     """
-    shape = img.shape[:2]  # [height, width]
+    shape = img.shape[:2]
     r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
     new_unpad = (int(round(shape[1] * r)), int(round(shape[0] * r)))
     dw = (new_shape[1] - new_unpad[0]) / 2.0
@@ -150,7 +150,6 @@ class ComicTextDetector(BaseBubbleDetector):
         """
         Unletterboxes segmentation mask [1, 1, 1024, 1024] to original image resolution (orig_h, orig_w).
         """
-        # Use the same asymmetric rounding as letterbox for odd padding.
         mask_h, mask_w = seg.shape[-2:]
         top = int(round(dh - 0.1))
         bottom = mask_h - int(round(dh + 0.1))
@@ -171,7 +170,7 @@ class ComicTextDetector(BaseBubbleDetector):
 
         blk, seg, _, r, (dw, dh) = self.detect_raw(image)
         self._latest_segmentation = (image, self.get_unletterboxed_seg(seg, orig_w, orig_h, dw, dh))
-        preds = blk[0]  # Shape: [64512, 7]
+        preds = blk[0]
 
         cx = preds[:, 0]
         cy = preds[:, 1]
@@ -223,8 +222,6 @@ class ComicTextDetector(BaseBubbleDetector):
 
             unpad_x = x1_v[idx] - dw
             unpad_y = y1_v[idx] - dh
-            # Clip endpoints independently; moving a negative origin alone used
-            # to shift/expand edge-cropped text boxes into the neighbouring art.
             bx = max(0, int(round(unpad_x / r)))
             by = max(0, int(round(unpad_y / r)))
             right = min(orig_w, int(round((unpad_x + w_v[idx]) / r)))
@@ -250,7 +247,6 @@ class ComicTextDetector(BaseBubbleDetector):
             )
             detected_list.append(bubble)
 
-        # Recover text groups from character support before hybrid matching/OCR.
         if not refine:
             return sort_manga_reading_order(detected_list, reading_direction='rtl')
         segmentation = self._latest_segmentation[1]

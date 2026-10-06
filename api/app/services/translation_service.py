@@ -89,7 +89,6 @@ class MangaTranslationService:
     def is_configured(self) -> bool:
         """Returns True if a real API key is configured (or if using a local provider like Ollama)."""
         if not self.api_key or self.api_key.lower() in ("your_api_key_here", "none", ""):
-            # If pointing to localhost/ollama, api_key is optional
             return urlsplit(self.base_url).hostname in (
                 "localhost", "127.0.0.1", "::1"
             )
@@ -97,6 +96,11 @@ class MangaTranslationService:
 
     def _build_system_prompt(self, target_lang: str) -> str:
         lang_name = "Indonesian" if target_lang.lower() == "id" else "English"
+        examples = (
+            "(e.g., 'いや、' -> 'Tidak,' / 'Bukan,', 'いい' -> 'Baik' / 'Bagus', '......' -> '...')"
+            if target_lang.lower() == "id"
+            else "(e.g., 'いや、' -> 'No,' / 'Not really,', 'いい' -> 'Good' / 'Fine', '......' -> '...')"
+        )
         return (
             f"You are a professional manga and comic localization translator.\n"
             f"Your task is to translate Japanese manga dialogue bubbles into natural, contextually cohesive {lang_name} ({target_lang}).\n\n"
@@ -104,7 +108,7 @@ class MangaTranslationService:
             f"1. Target Language: Every dialogue in the translation field MUST be translated into {lang_name}. "
             f"NEVER repeat or echo original Japanese characters (Kanji, Hiragana, Katakana) in the translation field.\n"
             f"2. Short Expressions: Even short interjections, reactions, and words MUST be translated into {lang_name} "
-            f"(e.g., 'いや、' -> 'Tidak,' / 'Bukan,', 'いい' -> 'Baik' / 'Bagus', '......' -> '...').\n"
+            f"{examples}.\n"
             f"3. Contextual Cohesion: Speech bubbles are provided in authentic manga reading order (#1, #2, #3...). "
             f"Maintain speaker consistency, dialogue continuation, and conversational tone across bubbles.\n"
             f"4. Tone & Slang: Adapt manga colloquialisms, character personality, emotional shouts, and exclamation marks accurately.\n"
@@ -162,8 +166,6 @@ class MangaTranslationService:
         if not pending:
             return results
 
-        # Keep GET URLs comfortably below common proxy/server URL limits while
-        # still translating most manga pages in one request.
         batches: List[List[Tuple[int, str]]] = []
         current_batch: List[Tuple[int, str]] = []
         current_chars = 0

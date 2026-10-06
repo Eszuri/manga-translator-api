@@ -3,7 +3,6 @@ import socket
 import sys
 from pathlib import Path
 
-# Pastikan output console/pipe selalu mendukung UTF-8 di Windows
 for stream in (sys.stdout, sys.stderr):
     if stream and hasattr(stream, "reconfigure"):
         try:

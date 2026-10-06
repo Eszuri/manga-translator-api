@@ -40,10 +40,7 @@ class HybridBubbleDetector(BaseBubbleDetector):
             match = regions.match(text)
             if (text.area < max(300, width * height * 0.0004)
                     and (match is None or match[2][2] * match[2][3] < max(2500, width * height * 0.002))):
-                # Isolated strokes on scenery/UI (e.g. a light switch) do not
-                # justify an OCR/translation request.
                 continue
-            # A white component alone does not establish a shared speaker.
             for group in groups:
                 if (match is not None and group['match'] is not None
                         and match[:2] == group['match'][:2]
@@ -62,7 +59,6 @@ class HybridBubbleDetector(BaseBubbleDetector):
             if match is not None:
                 x, y, w, h = match[2]
                 mask = regions.mask(match)
-                # Partition compound balloons by distance to each text envelope.
                 yy, xx = np.mgrid[y:y + h, x:x + w]
 
                 def distance(box):
@@ -81,8 +77,6 @@ class HybridBubbleDetector(BaseBubbleDetector):
                 polygon = interior_polygon(mask, (x, y))
                 layout = safe_layout_box(mask, (x, y), text)
                 if polygon:
-                    # Partitions can leave narrow internal slits. The filled
-                    # exterior contour is closer to the actual usable balloon.
                     px, py, pw, ph = cv2.boundingRect(np.array(polygon, np.int32))
                     filled = np.zeros((ph, pw), np.uint8)
                     cv2.fillPoly(filled, [np.array([(cx - px, cy - py) for cx, cy in polygon],
@@ -106,7 +100,6 @@ class HybridBubbleDetector(BaseBubbleDetector):
                 else:
                     balloon = text
             else:
-                # Keep floating text near its envelope, never use the whole panel.
                 pad = max(2, round(max(width, height) * 0.004))
                 x, y = max(0, text.x - pad), max(0, text.y - pad)
                 balloon = BoundingBox(x=x, y=y, width=min(width, text.right + pad) - x,

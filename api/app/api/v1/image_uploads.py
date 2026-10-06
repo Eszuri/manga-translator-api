@@ -14,8 +14,6 @@ ALLOWED_CONTENT_TYPES = {
     "image/jpeg",
     "image/png",
     "image/webp",
-    # Some browser-extension clients omit a precise MIME type. Image decoding below
-    # remains authoritative, so accepting this does not permit arbitrary files.
     "application/octet-stream",
 }
 ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP"}
@@ -41,8 +39,6 @@ async def read_validated_image(file: UploadFile) -> Image.Image:
             detail="Uploaded image exceeds the configured size limit.",
         )
 
-    # Decoding does not use ONNX; it must not wait behind a long GPU task before
-    # a streaming response can start and send queue/processing heartbeats.
     return await run_decode_task(decode_validated_image, contents)
 
 

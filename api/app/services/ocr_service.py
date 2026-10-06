@@ -163,7 +163,6 @@ class MangaOcrService:
 
         crop = full_image.crop((x1, y1, x2, y2))
         if bubble.bubble_polygon:
-            # Exclude neighbouring art/balloons from padded OCR crops.
             shape = Image.new('L', crop.size, 0)
             ImageDraw.Draw(shape).polygon(
                 [(x - x1, y - y1) for x, y in bubble.bubble_polygon], fill=255)

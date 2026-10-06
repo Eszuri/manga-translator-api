@@ -58,7 +58,6 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Button, Footer, RichLog
 
-# Pastikan encoding console Windows mendukung karakter Unicode/Rich
 for stream in (sys.stdout, sys.stderr):
     if stream and hasattr(stream, "reconfigure"):
         try:
@@ -66,7 +65,6 @@ for stream in (sys.stdout, sys.stderr):
         except Exception:
             pass
 
-# Direktori proyek
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 API_DIR = PROJECT_ROOT / "api"
@@ -81,7 +79,6 @@ ENV_FILE = API_DIR / ".env"
 PYTHON_EXE = VENV_PYTHON if VENV_PYTHON.exists() else Path(sys.executable)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
-# Pelacak proses aktif untuk shutdown bersih
 ACTIVE_CHILD_PIDS: set[int] = set()
 EXTENSION_BUILD_DONE = threading.Event()
 EXTENSION_BUILD_DONE.set()
@@ -112,14 +109,12 @@ def _close_proc_transport(proc: asyncio.subprocess.Process | None) -> None:
 def cleanup_all_processes(wait_extension: bool = True) -> None:
     """Tutup server/worker dan selesaikan build extension sebelum exit."""
     global EXTENSION_BUILD_RUNNING
-    # 1. Jika build extension sedang berjalan, beri waktu untuk menyelesaikan penulisan file
     if wait_extension and EXTENSION_BUILD_RUNNING:
         try:
             EXTENSION_BUILD_DONE.wait(timeout=5.0)
         except Exception:
             pass
 
-    # 2. Tutup seluruh subprocess (Server / Image Process / Chrome) yang masih aktif
     pids = list(ACTIVE_CHILD_PIDS)
     for pid in pids:
         cleanup_pid(pid)
@@ -128,8 +123,6 @@ def cleanup_all_processes(wait_extension: bool = True) -> None:
 
 def win32_ctrl_handler(ctrl_type: int) -> bool:
     """Menangani event close terminal / shutdown dari OS Windows."""
-    # 0 = CTRL_C_EVENT, 1 = CTRL_BREAK_EVENT, 2 = CTRL_CLOSE_EVENT
-    # 5 = CTRL_LOGOFF_EVENT, 6 = CTRL_SHUTDOWN_EVENT
     cleanup_all_processes(wait_extension=True)
     return False
 
@@ -261,7 +254,6 @@ def build_extension_package_sync(log_func=None) -> bool:
             log_func(f"[red]Gagal membuat file ZIP: {e}[/red]")
             return False
 
-        # Kemas CRX jika Chromium tersedia
         browser = find_chromium_browser()
         if not browser:
             log_func("[yellow]Browser Chromium tidak ditemukan. Hanya paket ZIP yang dibuat.[/yellow]")
@@ -399,7 +391,6 @@ class MangaTranslatorTUI(App):
         is_server_alive = self.server_proc is not None and self.server_proc.returncode is None
         is_worker_alive = self.worker_proc is not None and self.worker_proc.returncode is None
 
-        # Server
         if is_server_alive:
             btn_server.label = "Stop Server"
             btn_server.variant = "error"
@@ -407,7 +398,6 @@ class MangaTranslatorTUI(App):
             btn_server.label = "Start Server"
             btn_server.variant = "success"
 
-        # Image Worker
         if is_worker_alive:
             btn_images.label = "Stop"
             btn_images.variant = "error"
@@ -434,7 +424,6 @@ class MangaTranslatorTUI(App):
         if self.server_proc and self.server_proc.returncode is None:
             self.stop_server()
         else:
-            # Matikan task/proses gambar terlebih dahulu agar tidak bentrok
             if self.worker_proc and self.worker_proc.returncode is None:
                 self.stop_worker()
             self.start_server()
@@ -509,7 +498,6 @@ class MangaTranslatorTUI(App):
         if self.worker_proc and self.worker_proc.returncode is None:
             self.stop_worker()
         else:
-            # Matikan server terlebih dahulu agar tidak bentrok memori/resource
             if self.server_proc and self.server_proc.returncode is None:
                 self.stop_server()
             self.run_image_pipeline()
@@ -649,10 +637,6 @@ class MangaTranslatorTUI(App):
         cleanup_all_processes(wait_extension=True)
 
 
-# ==========================================
-# CLI ENTRY POINT (CLI Headless & TUI Mode)
-# ==========================================
-
 def run_cli_server():
     """Menjalankan server langsung dari terminal."""
     print("Menjalankan API Server lokal...")
@@ -731,7 +715,6 @@ def main():
         build_extension_package_sync()
         return
 
-    # Default: Buka TUI Interaktif
     app = MangaTranslatorTUI()
     app.run()
 

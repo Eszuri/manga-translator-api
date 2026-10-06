@@ -1,18 +1,14 @@
-# Python
 **/__pycache__/
 *.py[cod]
 .venv*/
 
-# Local configuration and model files
 *.onnx
 **/models/
 .env
 
-# Local manga source images and generated build output
 api/Images/original Images/
 api/Images/build Images/
 
-# Build artifacts
 /build/
 dist/
 *.crx

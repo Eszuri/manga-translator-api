@@ -110,7 +110,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             formData.append('file', blob, 'image.jpg');
         }
         
-        // Append other fields
         for (const [key, value] of Object.entries(request.data)) {
             if (key !== 'fileData' && key !== 'mimeType') {
                 formData.append(key, value);
