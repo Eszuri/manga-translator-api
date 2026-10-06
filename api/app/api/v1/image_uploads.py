@@ -5,9 +5,9 @@ import warnings
 
 from fastapi import HTTPException, UploadFile, status
 from PIL import Image, UnidentifiedImageError
-from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
+from app.core.image_worker import run_decode_task
 
 
 ALLOWED_CONTENT_TYPES = {
@@ -43,7 +43,7 @@ async def read_validated_image(file: UploadFile) -> Image.Image:
 
     # Decoding does not use ONNX; it must not wait behind a long GPU task before
     # a streaming response can start and send queue/processing heartbeats.
-    return await run_in_threadpool(decode_validated_image, contents)
+    return await run_decode_task(decode_validated_image, contents)
 
 
 def decode_validated_image(contents: bytes) -> Image.Image:

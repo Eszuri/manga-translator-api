@@ -51,9 +51,9 @@ const MangaTranslationCache = {
     const fontScale = (settings && settings.fontScale) ?? 1.0;
     const allCaps = (settings && settings.allCaps) ?? true;
     const apiUrl = (settings && settings.apiUrl) || 'http://127.0.0.1:8000';
-    // Do not reuse old keys: query-stripped URLs and failed OCR results may
-    // already have produced incorrect entries in earlier cache versions.
-    return `v4_${JSON.stringify([lang, translator, direction, detector, fontScale, allCaps, apiUrl, page, imageIndex, source])}`;
+    // Previous versions may contain untranslated text or results saved under
+    // an API URL different from the server that actually processed the image.
+    return `v6_${JSON.stringify([lang, translator, direction, detector, fontScale, allCaps, apiUrl, page, imageIndex, source])}`;
   },
 
   async getCachedTranslation(cacheKey) {

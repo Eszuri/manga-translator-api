@@ -30,15 +30,16 @@ function formatApiError(detail, status) {
 }
 
 async function apiRequest(endpoint, options = {}) {
-  const settings = await getSettings();
-  const url = `${settings.apiUrl.replace(/\/$/, '')}${endpoint}`;
+  const { apiUrl, expectBlob, ...fetchOptions } = options;
+  const baseUrl = apiUrl || (await getSettings()).apiUrl;
+  const url = `${baseUrl.replace(/\/$/, '')}${endpoint}`;
   
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30000);
   
   try {
     const res = await fetch(url, {
-      ...options,
+      ...fetchOptions,
       signal: controller.signal
     });
     
@@ -51,7 +52,7 @@ async function apiRequest(endpoint, options = {}) {
       return { success: false, error: errorMsg };
     }
     
-    if (options.expectBlob) {
+    if (expectBlob) {
       const blob = await res.blob();
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -137,8 +138,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse(result);
       }
       else if (request.action === 'inpaintPageStream') {
-        const settings = await getSettings();
-        const url = `${settings.apiUrl.replace(/\/$/, '')}/api/v1/translate/inpaint-stream`;
+        const apiUrl = request.data.apiUrl || (await getSettings()).apiUrl;
+        const url = `${apiUrl.replace(/\/$/, '')}/api/v1/translate/inpaint-stream`;
         
         const formData = new FormData();
         if (request.data.fileData) {
@@ -146,7 +147,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           formData.append('file', blob, 'image.jpg');
         }
         for (const [key, value] of Object.entries(request.data)) {
-          if (key !== 'fileData' && key !== 'mimeType' && key !== 'imageSrc' && key !== 'jobId') {
+          if (!['fileData', 'mimeType', 'imageSrc', 'jobId', 'apiUrl'].includes(key)) {
             formData.append(key, value);
           }
         }
@@ -302,17 +303,17 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "translateMangaPage" && info.srcUrl) {
+    const jobId = crypto.randomUUID();
+    const target = { frameId: info.frameId ?? 0 };
     try {
-      chrome.tabs.sendMessage(tab.id, { 
-          action: 'contextMenuTranslateStart', 
-          srcUrl: info.srcUrl 
-      }).catch(err => {
-          console.warn("Content script not ready or error:", err);
-      });
-      
       const settings = await getSettings();
+      const started = await chrome.tabs.sendMessage(tab.id, {
+          action: 'contextMenuTranslateStart',
+          srcUrl: info.srcUrl, jobId, settings
+      }, target);
+      if (!started?.success) throw new Error(started?.error || 'The image is no longer available.');
       
-      const imgRes = await fetch(info.srcUrl);
+      const imgRes = await fetch(started.sourceUrl || info.srcUrl);
       if (!imgRes.ok) throw new Error(`Image request failed with HTTP ${imgRes.status}`);
       const imgBlob = await imgRes.blob();
       if (!imgBlob.type.startsWith('image/')) throw new Error('The image response is not an image.');
@@ -335,25 +336,28 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const endpoint = settings.translationMode === 'inpaint' ? '/api/v1/translate/inpaint-page' : '/api/v1/translate/page';
       
       const result = await apiRequest(endpoint, {
+          apiUrl: settings.apiUrl,
           method: 'POST',
           body: formData,
           expectBlob: settings.translationMode === 'inpaint'
       });
       
-      chrome.tabs.sendMessage(tab.id, {
+      await chrome.tabs.sendMessage(tab.id, {
           action: 'contextMenuTranslateResult',
           srcUrl: info.srcUrl,
+          jobId,
           result: result,
           mode: settings.translationMode
-      });
+      }, target);
       
     } catch (error) {
       console.error("Context menu translation error:", error);
-      chrome.tabs.sendMessage(tab.id, {
+      await chrome.tabs.sendMessage(tab.id, {
           action: 'contextMenuTranslateError',
           srcUrl: info.srcUrl,
+          jobId,
           error: error.toString()
-      });
+      }, target).catch(() => {});
     }
   }
 });

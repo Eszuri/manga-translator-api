@@ -1,5 +1,4 @@
 import os
-import logging
 from typing import List, Tuple, Optional
 from PIL import Image, ImageDraw, ImageFont, ImageChops
 
@@ -12,7 +11,10 @@ DEFAULT_FONT_PATH = os.path.join(
     "fonts",
     "comic_bold.ttf"
 )
-logger = logging.getLogger(__name__)
+
+
+class TypesettingError(RuntimeError):
+    """A dialogue cannot be rendered safely; never return an erased bubble."""
 
 
 class MangaTypesettingService:
@@ -240,7 +242,7 @@ class MangaTypesettingService:
         for bubble in bubbles:
             text = bubble.translation or bubble.text
             if not text or not text.strip():
-                continue
+                raise TypesettingError(f'Bubble {bubble.id}: no text available for rendering.')
 
             if self.all_caps:
                 text = text.upper()
@@ -265,7 +267,7 @@ class MangaTypesettingService:
             content_bottom = min(output_img.height, bbox.bottom - margin_y)
 
             if content_right <= content_left or content_bottom <= content_top:
-                continue
+                raise TypesettingError(f'Bubble {bubble.id}: render region is outside the image or empty.')
 
             target_w = content_right - content_left
             target_h = content_bottom - content_top
@@ -284,8 +286,7 @@ class MangaTypesettingService:
             )
 
             if not lines:
-                logger.warning('Bubble %s is too small to typeset without truncation', bubble.id)
-                continue
+                raise TypesettingError(f'Bubble {bubble.id}: text does not fit the render region without truncation.')
 
             # Render in a local transparent layer. Its boundaries enforce the
             # safe rectangle even in the rare case that a final glyph/stroke
@@ -318,6 +319,8 @@ class MangaTypesettingService:
                 ImageDraw.Draw(shape).polygon(
                     [(x - content_left, y - content_top) for x, y in bubble.bubble_polygon], fill=255)
                 text_layer.putalpha(ImageChops.multiply(text_layer.getchannel('A'), shape))
+            if text_layer.getchannel('A').getbbox() is None:
+                raise TypesettingError(f'Bubble {bubble.id}: the bubble mask hides all rendered text.')
             output_img.paste(text_layer, (content_left, content_top), text_layer)
 
         return output_img

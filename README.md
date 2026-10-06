@@ -35,13 +35,14 @@ dist/                    Paket hasil build extension
 
 | Keperluan | File |
 | --- | --- |
+| Control Center TUI (Semua Fitur) | `scripts\run-tui.bat` |
 | Server lokal Windows | `scripts\start-server.bat` |
 | Proses gambar lokal | `scripts\process-images.bat` |
 | Build extension | `scripts\build-extension.bat` |
 
 ## Menjalankan Backend
 
-Siapkan `api/.env`, model, dan environment `.venv-gpu` terlebih dahulu. Jalankan
+Siapkan `api/.env`, model, dan environment `.venv` terlebih dahulu. Jalankan
 server dari terminal:
 
 ```powershell
@@ -97,11 +98,11 @@ Pipeline yang berjalan di CPU:
 
 ## Persiapan Lingkungan Lokal
 
-Gunakan Python 3.11. Jika `.venv-gpu` belum ada:
+Gunakan Python 3.11. Jika `.venv` belum ada:
 
 ```powershell
-py -3.11 -m venv .venv-gpu
-.\.venv-gpu\Scripts\python.exe -m pip install -r api\requirements\local.txt
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r api\requirements\local.txt
 ```
 
 Salin `api/.env.example` ke `api/.env` jika belum ada:

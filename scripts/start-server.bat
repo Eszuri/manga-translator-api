@@ -7,8 +7,8 @@ pushd "%~dp0\.." || (
     goto :finish
 )
 
-if not exist ".venv-gpu\Scripts\python.exe" (
-    echo [FAILED] Local GPU environment is missing: .venv-gpu
+if not exist ".venv\Scripts\python.exe" (
+    echo [FAILED] Local Python environment is missing: .venv
     popd
     set "SERVER_EXIT_CODE=1"
     goto :finish
@@ -20,7 +20,7 @@ pushd api || (
     popd
     goto :finish
 )
-..\.venv-gpu\Scripts\python.exe -m tools.run_local
+..\.venv\Scripts\python.exe -m tools.run_local
 set "SERVER_EXIT_CODE=%ERRORLEVEL%"
 popd
 popd

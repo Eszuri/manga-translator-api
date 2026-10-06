@@ -21,8 +21,8 @@ if not defined HAS_IMAGE (
     goto :leave_root
 )
 
-if not exist ".venv-gpu\Scripts\python.exe" (
-    echo [FAILED] Local GPU environment is missing: .venv-gpu
+if not exist ".venv\Scripts\python.exe" (
+    echo [FAILED] Local Python environment is missing: .venv
     goto :leave_root
 )
 
@@ -32,7 +32,7 @@ pushd api || (
 )
 
 echo Processing images from Images\original Images...
-..\.venv-gpu\Scripts\python.exe -m tools.build_local --device gpu %*
+..\.venv\Scripts\python.exe -m tools.build_local --device gpu %*
 set "PROCESS_EXIT_CODE=%ERRORLEVEL%"
 popd
 

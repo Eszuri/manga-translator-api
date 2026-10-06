@@ -59,6 +59,7 @@ class Settings(BaseModel):
 
     MAX_UPLOAD_BYTES: int = Field(default=int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))), gt=0)
     MAX_IMAGE_PIXELS: int = Field(default=int(os.getenv("MAX_IMAGE_PIXELS", "40000000")), gt=0)
+    MAX_IMAGE_REQUESTS: int = Field(default=int(os.getenv("MAX_IMAGE_REQUESTS", "4")), gt=0)
 
     SUPPORTED_SOURCE_LANGS: List[str] = ["ja", "ko", "zh", "en"]
     SUPPORTED_TARGET_LANGS: List[str] = ["id", "en"]

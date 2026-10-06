@@ -2,6 +2,7 @@ import asyncio
 import re
 import json
 import logging
+import unicodedata
 from urllib.parse import urlsplit
 from typing import Dict, List, Optional, Tuple, Any
 import httpx
@@ -14,6 +15,24 @@ logger = logging.getLogger(__name__)
 
 class TranslationError(RuntimeError):
     """A translation failure that must not be rendered over source dialogue."""
+
+
+def validate_translations(
+    dialogue_items: List[Dict[str, Any]], translations: Dict[int, str], engine: str
+) -> Dict[int, str]:
+    """Require complete target-language text before changing any bubble."""
+    for item in dialogue_items:
+        bubble_id = item["id"]
+        text = translations.get(bubble_id)
+        if not isinstance(text, str) or not text.strip():
+            raise TranslationError(f"{engine} did not return a valid translation for bubble {bubble_id}.")
+        normalized = unicodedata.normalize("NFKC", text)
+        if re.search(r'[\u3040-\u30ff\u3400-\u9fff]', normalized):
+            raise TranslationError(
+                f"{engine} returned untranslated Japanese text for bubble {bubble_id}. "
+                "The original image was not modified."
+            )
+    return translations
 
 
 def extract_json_from_text(text: str) -> Optional[dict]:
@@ -119,8 +138,6 @@ class MangaTranslationService:
         Translation failures are raised so the pipeline cannot silently inpaint the
         source text and render the untranslated Japanese text again.
         """
-        import unicodedata
-
         results: Dict[int, str] = {}
         target_code = "id" if target_lang.lower() in ("id", "indonesian") else "en"
 
@@ -181,9 +198,9 @@ class MangaTranslationService:
                 for attempt in range(3):
                     try:
                         response = await client.get(url, params=params)
-                    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                    except httpx.TransportError as exc:
                         if attempt == 2:
-                            raise RuntimeError(
+                            raise TranslationError(
                                 f"Google Translate could not be reached: {type(exc).__name__}"
                             ) from exc
                         await asyncio.sleep(0.5 * (2 ** attempt))
@@ -202,21 +219,21 @@ class MangaTranslationService:
                 if response is None or response.status_code != 200:
                     status = response.status_code if response is not None else "no response"
                     logger.error("Google Translate request failed with HTTP %s", status)
-                    raise RuntimeError(f"Google Translate failed (HTTP {status})")
+                    raise TranslationError(f"Google Translate failed (HTTP {status})")
 
                 try:
                     translated_values = response.json()
                 except ValueError as exc:
-                    raise RuntimeError("Google Translate returned an invalid response") from exc
+                    raise TranslationError("Google Translate returned an invalid response") from exc
 
                 if not isinstance(translated_values, list) or len(translated_values) != len(batch):
-                    raise RuntimeError(
+                    raise TranslationError(
                         "Google Translate returned an unexpected number of results"
                     )
 
                 for (b_id, _), translated_value in zip(batch, translated_values):
                     if not isinstance(translated_value, str) or not translated_value.strip():
-                        raise RuntimeError(
+                        raise TranslationError(
                             f"Google Translate did not return text for bubble {b_id}"
                         )
                     translated_text = unicodedata.normalize("NFKC", translated_value).strip()
@@ -252,6 +269,8 @@ class MangaTranslationService:
             translations_map = await self._call_google_async(dialogue_items, target_lang=target_lang)
         else:
             translations_map = await self._call_llm_async(dialogue_items, target_lang=target_lang)
+
+        validate_translations(dialogue_items, translations_map, "Google Translate" if translator == "google" else "LLM")
 
         for b in bubbles:
             if b.id in translations_map:
@@ -327,12 +346,7 @@ class MangaTranslationService:
                     if str(k).isdigit() and isinstance(v, str):
                         result[int(k)] = v.strip()
 
-        for item in dialogue_items:
-            b_id = item["id"]
-            if b_id not in result or not result[b_id]:
-                raise TranslationError(f"LLM did not return a valid translation for bubble {b_id}.")
-
-        return result
+        return validate_translations(dialogue_items, result, "LLM")
 
 
 def get_translation_service(

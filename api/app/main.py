@@ -9,8 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.gpu import required_gpu_provider
+from app.core.request_limits import ImageRequestLimitMiddleware
 from app.api.v1.router import api_router
 from app.services.translation_service import TranslationError
+from app.services.typesetting_service import TypesettingError
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,12 @@ app = FastAPI(
 )
 
 app.add_middleware(
+    ImageRequestLimitMiddleware,
+    max_requests=settings.MAX_IMAGE_REQUESTS,
+    api_prefix=settings.API_V1_PREFIX,
+)
+
+app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
@@ -68,8 +76,9 @@ async def request_validation_error(request: Request, exc: RequestValidationError
 
 
 @app.exception_handler(TranslationError)
-async def translation_error(request: Request, exc: TranslationError) -> JSONResponse:
-    logger.warning("Translation failed on %s: %s", request.url.path, exc)
+@app.exception_handler(TypesettingError)
+async def translation_error(request: Request, exc: TranslationError | TypesettingError) -> JSONResponse:
+    logger.warning("Translation pipeline failed on %s: %s", request.url.path, exc)
     return JSONResponse(status_code=502, content={"detail": str(exc)})
 
 

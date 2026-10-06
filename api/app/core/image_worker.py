@@ -5,16 +5,39 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import json
 
+from app.core.request_limits import current_image_request
+from app.core.config import settings
+
 
 # A single worker prevents concurrent Run calls on shared DirectML sessions.
 # Cancelling an HTTP request cannot release the worker while inference still runs.
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="image-worker")
+_decode_executor = ThreadPoolExecutor(
+    max_workers=settings.MAX_IMAGE_REQUESTS, thread_name_prefix="image-decode"
+)
 
 
 async def run_image_task(function, *args, **kwargs):
-    return await asyncio.get_running_loop().run_in_executor(
-        _executor, partial(function, *args, **kwargs)
-    )
+    return await _run_native_task(_executor, function, *args, **kwargs)
+
+
+async def run_decode_task(function, *args, **kwargs):
+    return await _run_native_task(_decode_executor, function, *args, **kwargs)
+
+
+async def _run_native_task(executor, function, *args, **kwargs):
+    lease = current_image_request.get()
+    if lease is not None:
+        lease.start_task()
+    try:
+        future = executor.submit(partial(function, *args, **kwargs))
+    except BaseException:
+        if lease is not None:
+            lease.finish_task()
+        raise
+    if lease is not None:
+        future.add_done_callback(lambda completed: lease.finish_task())
+    return await asyncio.wrap_future(future)
 
 
 async def stream_with_heartbeats(events, interval=10.0):
