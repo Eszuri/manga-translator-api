@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import warnings
 import webbrowser
 import zipfile
 from datetime import datetime
@@ -23,6 +24,32 @@ from pathlib import Path
 
 if sys.platform == "win32":
     from ctypes import wintypes
+
+    try:
+        from asyncio.base_subprocess import BaseSubprocessTransport
+        from asyncio.proactor_events import _ProactorBasePipeTransport
+
+        _orig_subprocess_del = BaseSubprocessTransport.__del__
+
+        def _safe_subprocess_del(self, _warn=warnings.warn):
+            try:
+                _orig_subprocess_del(self, _warn)
+            except Exception:
+                pass
+
+        BaseSubprocessTransport.__del__ = _safe_subprocess_del
+
+        _orig_pipe_del = _ProactorBasePipeTransport.__del__
+
+        def _safe_pipe_del(self, _warn=warnings.warn):
+            try:
+                _orig_pipe_del(self, _warn)
+            except Exception:
+                pass
+
+        _ProactorBasePipeTransport.__del__ = _safe_pipe_del
+    except Exception:
+        pass
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -66,6 +93,18 @@ def cleanup_pid(pid: int) -> None:
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=5)
     except Exception:
         pass
+
+
+def _close_proc_transport(proc: asyncio.subprocess.Process | None) -> None:
+    """Tutup transport & pipe asyncio proses dengan aman."""
+    if proc is None:
+        return
+    transport = getattr(proc, "_transport", None)
+    if transport is not None:
+        try:
+            transport.close()
+        except Exception:
+            pass
 
 
 def cleanup_all_processes(wait_extension: bool = True) -> None:
@@ -415,6 +454,7 @@ class MangaTranslatorTUI(App):
         finally:
             if self.server_proc:
                 ACTIVE_CHILD_PIDS.discard(self.server_proc.pid)
+                _close_proc_transport(self.server_proc)
             self.server_proc = None
             self.update_status()
 
@@ -426,6 +466,7 @@ class MangaTranslatorTUI(App):
             ACTIVE_CHILD_PIDS.discard(pid)
             self.log_msg(f"[yellow]Stopping server (PID: {pid})...[/yellow]")
             cleanup_pid(pid)
+            _close_proc_transport(proc)
             self.update_status()
 
     def action_trigger_image_build(self) -> None:
@@ -446,6 +487,7 @@ class MangaTranslatorTUI(App):
             ACTIVE_CHILD_PIDS.discard(pid)
             self.log_msg(f"[yellow]Stopping task (PID: {pid})...[/yellow]")
             cleanup_pid(pid)
+            _close_proc_transport(proc)
             self.update_status()
 
     @work(exclusive=True, group="task_group")
@@ -507,6 +549,7 @@ class MangaTranslatorTUI(App):
         finally:
             if self.worker_proc:
                 ACTIVE_CHILD_PIDS.discard(self.worker_proc.pid)
+                _close_proc_transport(self.worker_proc)
             self.worker_proc = None
             self.current_task = None
             self.update_status()
@@ -548,6 +591,8 @@ class MangaTranslatorTUI(App):
 
     def action_quit(self) -> None:
         """Tutup atau selesaikan proses aktif sebelum keluar."""
+        _close_proc_transport(self.worker_proc)
+        _close_proc_transport(self.server_proc)
         if self.worker_proc and self.worker_proc.returncode is None:
             self.stop_worker()
         if self.server_proc and self.server_proc.returncode is None:
@@ -556,6 +601,8 @@ class MangaTranslatorTUI(App):
         self.exit()
 
     def on_unmount(self) -> None:
+        _close_proc_transport(self.worker_proc)
+        _close_proc_transport(self.server_proc)
         if self.worker_proc and self.worker_proc.returncode is None:
             self.stop_worker()
         if self.server_proc and self.server_proc.returncode is None:
