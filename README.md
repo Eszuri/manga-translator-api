@@ -119,16 +119,10 @@ Folder `models` harus berisi:
 
 ## Build Gambar Lokal
 
-Masukkan JPEG, PNG, atau WebP ke `api/Images/original Images`. Contoh memproses satu gambar:
+Masukkan JPEG, PNG, atau WebP ke `api/Images/original Images`. Untuk memproses gambar:
 
 ```powershell
-scripts\run-tui.bat --process-images --limit 1
-```
-
-Gunakan opsi `--image "nama.jpg"` untuk memilih file tertentu:
-
-```powershell
-scripts\run-tui.bat --process-images --image "001.jpg"
+scripts\run-tui.bat --process-images
 ```
 
 *(Atau buka `scripts\run-tui.bat` dan tekan tombol **`2`**).*

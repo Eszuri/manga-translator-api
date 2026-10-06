@@ -7,21 +7,27 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
+import ctypes
 import os
-import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import webbrowser
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
+if sys.platform == "win32":
+    from ctypes import wintypes
+
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Footer, Header, Input, RichLog, Static
+from textual.containers import Horizontal
+from textual.widgets import Button, Footer, RichLog
 
 # Pastikan encoding console Windows mendukung karakter Unicode/Rich
 for stream in (sys.stdout, sys.stderr):
@@ -45,6 +51,72 @@ ENV_FILE = API_DIR / ".env"
 
 PYTHON_EXE = VENV_PYTHON if VENV_PYTHON.exists() else Path(sys.executable)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
+# Pelacak proses aktif untuk shutdown bersih
+ACTIVE_CHILD_PIDS: set[int] = set()
+EXTENSION_BUILD_DONE = threading.Event()
+EXTENSION_BUILD_DONE.set()
+EXTENSION_BUILD_RUNNING = False
+_CTRL_HANDLER_REF = None
+
+
+def cleanup_pid(pid: int) -> None:
+    """Menghentikan proses anak beserta seluruh pohon prosesnya (tree-kill)."""
+    try:
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+
+def cleanup_all_processes(wait_extension: bool = True) -> None:
+    """Tutup server/worker dan selesaikan build extension sebelum exit."""
+    global EXTENSION_BUILD_RUNNING
+    # 1. Jika build extension sedang berjalan, beri waktu untuk menyelesaikan penulisan file
+    if wait_extension and EXTENSION_BUILD_RUNNING:
+        try:
+            EXTENSION_BUILD_DONE.wait(timeout=5.0)
+        except Exception:
+            pass
+
+    # 2. Tutup seluruh subprocess (Server / Image Process / Chrome) yang masih aktif
+    pids = list(ACTIVE_CHILD_PIDS)
+    for pid in pids:
+        cleanup_pid(pid)
+    ACTIVE_CHILD_PIDS.clear()
+
+
+def win32_ctrl_handler(ctrl_type: int) -> bool:
+    """Menangani event close terminal / shutdown dari OS Windows."""
+    # 0 = CTRL_C_EVENT, 1 = CTRL_BREAK_EVENT, 2 = CTRL_CLOSE_EVENT
+    # 5 = CTRL_LOGOFF_EVENT, 6 = CTRL_SHUTDOWN_EVENT
+    cleanup_all_processes(wait_extension=True)
+    return False
+
+
+def setup_process_lifecycle() -> None:
+    """Mendaftarkan handler lifecycle proses untuk exit yang bersih."""
+    global _CTRL_HANDLER_REF
+    atexit.register(cleanup_all_processes)
+
+    if sys.platform == "win32":
+        try:
+            kernel32 = ctypes.windll.kernel32
+            PHANDLER_ROUTINE = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+            _CTRL_HANDLER_REF = PHANDLER_ROUTINE(win32_ctrl_handler)
+            kernel32.SetConsoleCtrlHandler(_CTRL_HANDLER_REF, True)
+        except Exception:
+            pass
+
+    def _sig_handler(signum, frame):
+        cleanup_all_processes(wait_extension=True)
+        sys.exit(0)
+
+    for sig in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        if hasattr(signal, sig):
+            try:
+                signal.signal(getattr(signal, sig), _sig_handler)
+            except Exception:
+                pass
 
 
 def get_server_port() -> str:
@@ -83,76 +155,89 @@ def find_chromium_browser() -> str | None:
 
 def build_extension_package_sync(log_func=None) -> bool:
     """Memaketkan folder extension/ menjadi .zip dan .crx secara native."""
-    if log_func is None:
-        from rich import print as rprint
-        log_func = rprint
-
-    manifest = EXTENSION_DIR / "manifest.json"
-    if not manifest.exists():
-        log_func(f"[red]Manifest ekstensi tidak ditemukan: {manifest}[/red]")
-        return False
-
-    DIST_DIR.mkdir(parents=True, exist_ok=True)
-    zip_output = DIST_DIR / "manga-translator.zip"
-    crx_output = DIST_DIR / "manga-translator.crx"
-    key_output = DIST_DIR / "manga-translator.pem"
-
-    log_func("[cyan]Mengemas extension menjadi manga-translator.zip...[/cyan]")
-    exclude_parts = {".git", "__pycache__"}
-    exclude_files = {".DS_Store", "Thumbs.db"}
-
+    global EXTENSION_BUILD_RUNNING
+    EXTENSION_BUILD_DONE.clear()
+    EXTENSION_BUILD_RUNNING = True
     try:
-        with zipfile.ZipFile(zip_output, "w", zipfile.ZIP_DEFLATED) as zf:
-            for file_path in EXTENSION_DIR.rglob("*"):
-                if file_path.is_file():
-                    rel = file_path.relative_to(EXTENSION_DIR)
-                    if any(p in rel.parts for p in exclude_parts):
-                        continue
-                    if file_path.name in exclude_files or file_path.suffix == ".pyc":
-                        continue
-                    zf.write(file_path, str(rel).replace("\\", "/"))
+        if log_func is None:
+            from rich import print as rprint
+            log_func = rprint
 
-        log_func(f"[green]✔ Berhasil membuat: {zip_output}[/green]")
-    except Exception as e:
-        log_func(f"[red]Gagal membuat file ZIP: {e}[/red]")
-        return False
+        manifest = EXTENSION_DIR / "manifest.json"
+        if not manifest.exists():
+            log_func(f"[red]Manifest ekstensi tidak ditemukan: {manifest}[/red]")
+            return False
 
-    # Kemas CRX jika Chromium tersedia
-    browser = find_chromium_browser()
-    if not browser:
-        log_func("[yellow]Browser Chromium tidak ditemukan. Hanya paket ZIP yang dibuat.[/yellow]")
-        return True
+        DIST_DIR.mkdir(parents=True, exist_ok=True)
+        zip_output = DIST_DIR / "manga-translator.zip"
+        crx_output = DIST_DIR / "manga-translator.crx"
+        key_output = DIST_DIR / "manga-translator.pem"
 
-    log_func(f"[cyan]Mengemas file CRX menggunakan: {Path(browser).name}...[/cyan]")
-    with tempfile.TemporaryDirectory() as temp_dir:
-        staging_dir = Path(temp_dir) / "extension"
+        log_func("[cyan]Mengemas extension menjadi manga-translator.zip...[/cyan]")
+        exclude_parts = {".git", "__pycache__"}
+        exclude_files = {".DS_Store", "Thumbs.db"}
+
         try:
-            shutil.copytree(EXTENSION_DIR, staging_dir)
-            args = [browser, f"--pack-extension={staging_dir}", "--no-message-box"]
-            if key_output.exists():
-                args.append(f"--pack-extension-key={key_output}")
+            with zipfile.ZipFile(zip_output, "w", zipfile.ZIP_DEFLATED) as zf:
+                for file_path in EXTENSION_DIR.rglob("*"):
+                    if file_path.is_file():
+                        rel = file_path.relative_to(EXTENSION_DIR)
+                        if any(p in rel.parts for p in exclude_parts):
+                            continue
+                        if file_path.name in exclude_files or file_path.suffix == ".pyc":
+                            continue
+                        zf.write(file_path, str(rel).replace("\\", "/"))
 
-            proc = subprocess.run(args, capture_output=True, timeout=60)
-            gen_crx = Path(temp_dir) / "extension.crx"
-            gen_pem = Path(temp_dir) / "extension.pem"
-
-            if gen_crx.exists():
-                shutil.move(str(gen_crx), str(crx_output))
-                if gen_pem.exists() and not key_output.exists():
-                    shutil.move(str(gen_pem), str(key_output))
-                log_func(f"[green]✔ Berhasil membuat: {crx_output}[/green]")
-            else:
-                log_func("[yellow]CRX tidak dihasilkan browser (Gunakan file ZIP).[/yellow]")
+            log_func(f"[green]✔ Berhasil membuat: {zip_output}[/green]")
         except Exception as e:
-            log_func(f"[yellow]Peringatan pembuatan CRX: {e} (Paket ZIP tetap siap).[/yellow]")
+            log_func(f"[red]Gagal membuat file ZIP: {e}[/red]")
+            return False
 
-    return True
+        # Kemas CRX jika Chromium tersedia
+        browser = find_chromium_browser()
+        if not browser:
+            log_func("[yellow]Browser Chromium tidak ditemukan. Hanya paket ZIP yang dibuat.[/yellow]")
+            return True
+
+        log_func(f"[cyan]Mengemas file CRX menggunakan: {Path(browser).name}...[/cyan]")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            staging_dir = Path(temp_dir) / "extension"
+            try:
+                shutil.copytree(EXTENSION_DIR, staging_dir)
+                args = [browser, f"--pack-extension={staging_dir}", "--no-message-box"]
+                if key_output.exists():
+                    args.append(f"--pack-extension-key={key_output}")
+
+                chrome_proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                ACTIVE_CHILD_PIDS.add(chrome_proc.pid)
+                try:
+                    chrome_proc.wait(timeout=30)
+                finally:
+                    ACTIVE_CHILD_PIDS.discard(chrome_proc.pid)
+
+                gen_crx = Path(temp_dir) / "extension.crx"
+                gen_pem = Path(temp_dir) / "extension.pem"
+
+                if gen_crx.exists():
+                    shutil.move(str(gen_crx), str(crx_output))
+                    if gen_pem.exists() and not key_output.exists():
+                        shutil.move(str(gen_pem), str(key_output))
+                    log_func(f"[green]✔ Berhasil membuat: {crx_output}[/green]")
+                else:
+                    log_func("[yellow]CRX tidak dihasilkan browser (Gunakan file ZIP).[/yellow]")
+            except Exception as e:
+                log_func(f"[yellow]Peringatan pembuatan CRX: {e} (Paket ZIP tetap siap).[/yellow]")
+
+        return True
+    finally:
+        EXTENSION_BUILD_RUNNING = False
+        EXTENSION_BUILD_DONE.set()
 
 
 class MangaTranslatorTUI(App):
-    """TUI satu layar interaktif untuk Manga Translator."""
+    """TUI minimalis untuk Manga Translator."""
 
-    TITLE = "Manga Translator Control Center"
+    TITLE = "Manga Translator"
 
     CSS = """
     Screen {
@@ -160,46 +245,45 @@ class MangaTranslatorTUI(App):
         padding: 0 1;
     }
 
-    #status-bar {
+    Button {
+        border: none !important;
         height: 3;
-        background: $surface;
-        border: round $primary;
-        padding: 0 1;
-        content-align: center middle;
-        margin-bottom: 1;
+    }
+
+    Button:focus {
+        text-style: none !important;
+        background-tint: transparent !important;
     }
 
     #action-bar {
         height: auto;
-        margin-bottom: 1;
+        margin: 1 0;
     }
 
     #action-bar Button {
+        border: none !important;
+        height: 3;
         margin-right: 1;
-    }
-
-    #extra-args {
-        margin-bottom: 1;
     }
 
     RichLog {
         height: 1fr;
         background: #0d1117;
         color: #e6edf3;
-        border: solid $accent;
-        padding: 1;
+        border: solid $primary-darken-1;
+        padding: 0 1;
     }
     """
 
     BINDINGS = [
-        ("1", "toggle_server", "Start/Stop Server"),
-        ("2", "trigger_image_build", "Process Images"),
-        ("3", "trigger_ext_build", "Build Extension"),
-        ("4", "open_docs", "Swagger Docs"),
-        ("5", "open_build_folder", "Buka Folder Hasil"),
-        ("c", "clear_log", "Clear Log"),
+        ("1", "toggle_server", "Server"),
+        ("2", "trigger_image_build", "Images"),
+        ("3", "trigger_ext_build", "Extension"),
+        ("4", "open_docs", "Docs"),
+        ("5", "open_build_folder", "Output"),
+        ("c", "clear_log", "Clear"),
         ("d", "toggle_dark", "Dark/Light"),
-        ("q", "quit", "Keluar"),
+        ("q", "quit", "Quit"),
     ]
 
     def __init__(self):
@@ -207,75 +291,61 @@ class MangaTranslatorTUI(App):
         self.port = get_server_port()
         self.server_proc: asyncio.subprocess.Process | None = None
         self.worker_proc: asyncio.subprocess.Process | None = None
+        self.current_task: str | None = None
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        yield Static(id="status-bar")
-
         with Horizontal(id="action-bar"):
-            yield Button("▶ [1] Start Server", id="btn-server", variant="success")
-            yield Button("⚡ [2] Process Images", id="btn-images", variant="primary")
-            yield Button("📦 [3] Build Extension", id="btn-ext", variant="warning")
-            yield Button("🌐 [4] Docs", id="btn-docs")
-            yield Button("📁 [5] Folder Hasil", id="btn-folder")
-            yield Button("🧹 [C] Clear Log", id="btn-clear")
-
-        yield Input(
-            placeholder="Opsi tambahan build gambar (opsional, contoh: --limit 1 atau --image 001.jpg)...",
-            id="extra-args",
-        )
-
+            for btn in (
+                Button("Start Server", id="btn-server", variant="success"),
+                Button("Process Images", id="btn-images", variant="primary"),
+                Button("Build Extension", id="btn-ext"),
+                Button("Docs", id="btn-docs"),
+                Button("Output", id="btn-folder"),
+                Button("Clear", id="btn-clear"),
+            ):
+                btn.can_focus = False
+                yield btn
         yield RichLog(id="terminal-log", wrap=True, highlight=True, markup=True)
         yield Footer()
 
     def on_mount(self) -> None:
-        self.update_status_bar()
-        self.log_msg(f"[green]✔ Manga Translator TUI Siap.[/green] Lingkungan: [cyan]{PYTHON_EXE.name}[/cyan]")
-        self.log_msg("[dim]Tekan tombol angka 1 - 5, C untuk bersihkan log, atau Q untuk keluar.[/dim]")
-        self.set_interval(3.0, self.update_status_bar)
+        self.update_status()
+        self.query_one("#terminal-log", RichLog).focus()
+        self.set_interval(2.0, self.update_status)
+        if not VENV_PYTHON.exists():
+            self.log_msg("[red]⚠ .venv missing. Silakan siapkan virtual environment terlebih dahulu.[/red]")
+        has_detector = (MODELS_DIR / "comic-text-detector.onnx").exists()
+        has_ocr = (MODELS_DIR / "manga-ocr").exists()
+        if not (has_detector and has_ocr):
+            self.log_msg("[yellow]⚠ Model detector atau OCR belum lengkap di folder models/.[/yellow]")
 
     def log_msg(self, text: str) -> None:
         now = datetime.now().strftime("%H:%M:%S")
         log = self.query_one("#terminal-log", RichLog)
         log.write(f"[dim]{now}[/dim] {text}")
 
-    # ==========================
-    # STATUS BAR
-    # ==========================
-
-    def update_status_bar(self) -> None:
-        status_bar = self.query_one("#status-bar", Static)
+    def update_status(self) -> None:
         btn_server = self.query_one("#btn-server", Button)
+        btn_images = self.query_one("#btn-images", Button)
 
-        # Status Server
-        if self.server_proc and self.server_proc.returncode is None:
-            server_badge = f"[green]● SERVER ACTIVE (:{self.port})[/green]"
-            btn_server.label = "⏹ [1] Stop Server"
+        is_server_alive = self.server_proc is not None and self.server_proc.returncode is None
+        is_worker_alive = self.worker_proc is not None and self.worker_proc.returncode is None
+
+        # Server
+        if is_server_alive:
+            btn_server.label = "Stop Server"
             btn_server.variant = "error"
         else:
-            server_badge = "[red]○ SERVER STOPPED[/red]"
-            btn_server.label = "▶ [1] Start Server"
+            btn_server.label = "Start Server"
             btn_server.variant = "success"
 
-        # Status Venv / GPU
-        venv_badge = "[green]Venv: .venv Siap[/green]" if VENV_PYTHON.exists() else "[yellow]Venv: Default[/yellow]"
-
-        # Status Model
-        has_detector = (MODELS_DIR / "comic-text-detector.onnx").exists()
-        has_ocr = (MODELS_DIR / "manga-ocr").exists()
-        models_badge = "[green]Models: OK[/green]" if (has_detector and has_ocr) else "[red]Models: Kurang[/red]"
-
-        # Hitung Gambar
-        img_count = 0
-        if IMAGES_ORIGINAL.exists():
-            img_count = len([f for f in IMAGES_ORIGINAL.iterdir() if f.suffix.lower() in IMAGE_EXTENSIONS])
-        images_badge = f"Images: [cyan]{img_count} file[/cyan]"
-
-        status_bar.update(f"{server_badge}   │   {venv_badge}   │   {models_badge}   │   {images_badge}")
-
-    # ==========================
-    # EVENT HANDLERS
-    # ==========================
+        # Image Worker
+        if is_worker_alive:
+            btn_images.label = "Stop"
+            btn_images.variant = "error"
+        else:
+            btn_images.label = "Process Images"
+            btn_images.variant = "primary"
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id
@@ -292,25 +362,21 @@ class MangaTranslatorTUI(App):
         elif bid == "btn-clear":
             self.action_clear_log()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.action_trigger_image_build()
-
-    # ==========================
-    # ACTIONS
-    # ==========================
-
     def action_toggle_server(self) -> None:
         if self.server_proc and self.server_proc.returncode is None:
             self.stop_server()
         else:
+            # Matikan task/proses gambar terlebih dahulu agar tidak bentrok
+            if self.worker_proc and self.worker_proc.returncode is None:
+                self.stop_worker()
             self.start_server()
 
-    @work(exclusive=True)
+    @work(exclusive=True, group="server_group")
     async def start_server(self) -> None:
         if self.server_proc and self.server_proc.returncode is None:
             return
 
-        self.log_msg(f"[green]>>> Memulai API Server pada port {self.port}...[/green]")
+        self.log_msg(f"[green]Starting Server (:{self.port})...[/green]")
         try:
             env = os.environ.copy()
             env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -322,67 +388,84 @@ class MangaTranslatorTUI(App):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
-            self.update_status_bar()
+            ACTIVE_CHILD_PIDS.add(self.server_proc.pid)
+            self.update_status()
 
-            while self.server_proc and self.server_proc.returncode is None:
-                line = await self.server_proc.stdout.readline()
+            proc = self.server_proc
+            while proc and proc.returncode is None:
+                line = await proc.stdout.readline()
                 if not line:
                     break
                 text = line.decode("utf-8", errors="replace").rstrip()
                 self.query_one("#terminal-log", RichLog).write(f"[dim][SRV][/dim] {text}")
 
-            await self.server_proc.wait()
-            self.log_msg("[red]>>> API Server dihentikan.[/red]")
+            if proc and proc.returncode is None:
+                try:
+                    await proc.wait()
+                except Exception:
+                    pass
+            self.log_msg("[yellow]Server stopped[/yellow]")
+        except asyncio.CancelledError:
+            proc = self.server_proc
+            if proc and proc.returncode is None:
+                cleanup_pid(proc.pid)
+            raise
         except Exception as e:
-            self.log_msg(f"[red]Error server: {e}[/red]")
+            self.log_msg(f"[red]Server error: {e}[/red]")
         finally:
+            if self.server_proc:
+                ACTIVE_CHILD_PIDS.discard(self.server_proc.pid)
             self.server_proc = None
-            self.update_status_bar()
+            self.update_status()
 
     def stop_server(self) -> None:
         if self.server_proc and self.server_proc.returncode is None:
-            pid = self.server_proc.pid
-            self.log_msg(f"[yellow]Menghentikan server (PID: {pid})...[/yellow]")
-            try:
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
-            except Exception:
-                try:
-                    self.server_proc.terminate()
-                except Exception:
-                    pass
+            proc = self.server_proc
             self.server_proc = None
-            self.update_status_bar()
+            pid = proc.pid
+            ACTIVE_CHILD_PIDS.discard(pid)
+            self.log_msg(f"[yellow]Stopping server (PID: {pid})...[/yellow]")
+            cleanup_pid(pid)
+            self.update_status()
 
     def action_trigger_image_build(self) -> None:
-        self.run_image_pipeline()
+        if self.worker_proc and self.worker_proc.returncode is None:
+            self.stop_worker()
+        else:
+            # Matikan server terlebih dahulu agar tidak bentrok memori/resource
+            if self.server_proc and self.server_proc.returncode is None:
+                self.stop_server()
+            self.run_image_pipeline()
 
-    @work(exclusive=True)
+    def stop_worker(self) -> None:
+        if self.worker_proc and self.worker_proc.returncode is None:
+            proc = self.worker_proc
+            self.worker_proc = None
+            self.current_task = None
+            pid = proc.pid
+            ACTIVE_CHILD_PIDS.discard(pid)
+            self.log_msg(f"[yellow]Stopping task (PID: {pid})...[/yellow]")
+            cleanup_pid(pid)
+            self.update_status()
+
+    @work(exclusive=True, group="task_group")
     async def run_image_pipeline(self) -> None:
         if self.worker_proc and self.worker_proc.returncode is None:
-            self.log_msg("[yellow]Tugas lain sedang berjalan. Harap tunggu hingga selesai.[/yellow]")
             return
 
-        # Validasi folder gambar asli
         if not IMAGES_ORIGINAL.exists():
-            self.log_msg(f"[red][FAILED] Folder gambar sumber tidak ditemukan: {IMAGES_ORIGINAL}[/red]")
+            self.log_msg(f"[red]Folder not found: {IMAGES_ORIGINAL}[/red]")
             return
 
         has_images = any(f.suffix.lower() in IMAGE_EXTENSIONS for f in IMAGES_ORIGINAL.iterdir())
         if not has_images:
-            self.log_msg(f"[red][FAILED] Tidak ada gambar JPEG, PNG, atau WebP di: {IMAGES_ORIGINAL}[/red]")
+            self.log_msg(f"[red]No images found in: {IMAGES_ORIGINAL}[/red]")
             return
 
-        args_input = self.query_one("#extra-args", Input).value.strip()
         cmd = [str(PYTHON_EXE), "-m", "tools.build_local", "--device", "gpu"]
-
-        if args_input:
-            try:
-                extra = shlex.split(args_input)
-                cmd.extend(extra)
-            except Exception:
-                cmd.extend(args_input.split())
-
-        self.log_msg(f"[cyan]>>> Memproses Gambar: {' '.join(cmd[1:])}[/cyan]")
+        self.log_msg("[cyan]Processing images...[/cyan]")
+        self.current_task = "Processing Images"
+        self.update_status()
 
         try:
             env = os.environ.copy()
@@ -394,62 +477,90 @@ class MangaTranslatorTUI(App):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
+            ACTIVE_CHILD_PIDS.add(self.worker_proc.pid)
 
-            while self.worker_proc and self.worker_proc.returncode is None:
-                line = await self.worker_proc.stdout.readline()
+            proc = self.worker_proc
+            while proc and proc.returncode is None:
+                line = await proc.stdout.readline()
                 if not line:
                     break
                 text = line.decode("utf-8", errors="replace").rstrip()
                 self.query_one("#terminal-log", RichLog).write(f"[cyan][IMG][/cyan] {text}")
 
-            await self.worker_proc.wait()
-            if self.worker_proc.returncode == 0:
-                self.log_msg("[green]✔ Pemrosesan gambar selesai! Hasil di api/Images/build Images[/green]")
-            else:
-                self.log_msg(f"[red]Pemrosesan gambar gagal (exit code: {self.worker_proc.returncode})[/red]")
+            if proc and proc.returncode is None:
+                try:
+                    await proc.wait()
+                except Exception:
+                    pass
+
+            if proc and proc.returncode == 0:
+                self.log_msg("[green]Images finished[/green]")
+            elif proc and proc.returncode is not None:
+                self.log_msg(f"[red]Images failed (code: {proc.returncode})[/red]")
+        except asyncio.CancelledError:
+            proc = self.worker_proc
+            if proc and proc.returncode is None:
+                cleanup_pid(proc.pid)
+            raise
         except Exception as e:
-            self.log_msg(f"[red]Error saat memproses gambar: {e}[/red]")
+            self.log_msg(f"[red]Image error: {e}[/red]")
         finally:
+            if self.worker_proc:
+                ACTIVE_CHILD_PIDS.discard(self.worker_proc.pid)
             self.worker_proc = None
+            self.current_task = None
+            self.update_status()
 
     def action_trigger_ext_build(self) -> None:
         self.run_extension_build()
 
-    @work(exclusive=True)
+    @work(exclusive=True, group="task_group")
     async def run_extension_build(self) -> None:
         if self.worker_proc and self.worker_proc.returncode is None:
-            self.log_msg("[yellow]Tugas lain sedang berjalan. Harap tunggu.[/yellow]")
             return
 
-        self.log_msg("[cyan]>>> Memulai Build Browser Extension...[/cyan]")
+        self.log_msg("[cyan]Building extension...[/cyan]")
+        self.current_task = "Building Extension"
+        self.update_status()
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, build_extension_package_sync, self.log_msg)
+            self.log_msg("[green]Extension built[/green]")
         except Exception as e:
-            self.log_msg(f"[red]Error saat build extension: {e}[/red]")
+            self.log_msg(f"[red]Extension error: {e}[/red]")
         finally:
             self.worker_proc = None
+            self.current_task = None
+            self.update_status()
 
     def action_open_docs(self) -> None:
         url = f"http://127.0.0.1:{self.port}/docs"
         webbrowser.open(url)
-        self.log_msg(f"Membuka browser docs: {url}")
+        self.log_msg(f"Docs: {url}")
 
     def action_open_build_folder(self) -> None:
         target = IMAGES_BUILD if IMAGES_BUILD.exists() else PROJECT_ROOT
         os.startfile(str(target))
-        self.log_msg(f"Membuka folder hasil: {target}")
+        self.log_msg(f"Folder: {target.name}")
 
     def action_clear_log(self) -> None:
         self.query_one("#terminal-log", RichLog).clear()
 
+    def action_quit(self) -> None:
+        """Tutup atau selesaikan proses aktif sebelum keluar."""
+        if self.worker_proc and self.worker_proc.returncode is None:
+            self.stop_worker()
+        if self.server_proc and self.server_proc.returncode is None:
+            self.stop_server()
+        cleanup_all_processes(wait_extension=True)
+        self.exit()
+
     def on_unmount(self) -> None:
-        for proc in (self.server_proc, self.worker_proc):
-            if proc and proc.returncode is None:
-                try:
-                    subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
-                except Exception:
-                    pass
+        if self.worker_proc and self.worker_proc.returncode is None:
+            self.stop_worker()
+        if self.server_proc and self.server_proc.returncode is None:
+            self.stop_server()
+        cleanup_all_processes(wait_extension=True)
 
 
 # ==========================================
@@ -461,10 +572,18 @@ def run_cli_server():
     print("Menjalankan API Server lokal...")
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    subprocess.run([str(PYTHON_EXE), "-m", "tools.run_local"], cwd=str(API_DIR), env=env)
+    proc = subprocess.Popen([str(PYTHON_EXE), "-m", "tools.run_local"], cwd=str(API_DIR), env=env)
+    ACTIVE_CHILD_PIDS.add(proc.pid)
+    try:
+        proc.wait()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        ACTIVE_CHILD_PIDS.discard(proc.pid)
+        cleanup_pid(proc.pid)
 
 
-def run_cli_images(extra_args: list[str]):
+def run_cli_images():
     """Menjalankan build gambar langsung dari terminal."""
     if not IMAGES_ORIGINAL.exists():
         print(f"[FAILED] Folder gambar tidak ditemukan: {IMAGES_ORIGINAL}")
@@ -474,28 +593,37 @@ def run_cli_images(extra_args: list[str]):
         print(f"[FAILED] Tidak ada gambar JPEG, PNG, atau WebP di: {IMAGES_ORIGINAL}")
         sys.exit(1)
 
-    cmd = [str(PYTHON_EXE), "-m", "tools.build_local", "--device", "gpu"] + extra_args
+    cmd = [str(PYTHON_EXE), "-m", "tools.build_local", "--device", "gpu"]
     print(f"Memproses gambar: {' '.join(cmd[1:])}")
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    proc = subprocess.run(cmd, cwd=str(API_DIR), env=env)
-    sys.exit(proc.returncode)
+    proc = subprocess.Popen(cmd, cwd=str(API_DIR), env=env)
+    ACTIVE_CHILD_PIDS.add(proc.pid)
+    try:
+        ret = proc.wait()
+    except KeyboardInterrupt:
+        ret = 1
+    finally:
+        ACTIVE_CHILD_PIDS.discard(proc.pid)
+        cleanup_pid(proc.pid)
+    sys.exit(ret)
 
 
 def main():
+    setup_process_lifecycle()
     parser = argparse.ArgumentParser(description="Manga Translator Runner & TUI", add_help=False)
     parser.add_argument("--server", action="store_true", help="Jalankan FastAPI Server lokal langsung")
     parser.add_argument("--process-images", action="store_true", help="Jalankan build gambar lokal langsung")
     parser.add_argument("--build-ext", action="store_true", help="Jalankan build browser extension langsung")
     parser.add_argument("-h", "--help", action="store_true", help="Tampilkan bantuan")
 
-    args, remaining = parser.parse_known_args()
+    args, _ = parser.parse_known_args()
 
     if args.help:
         print("Penggunaan:")
         print("  scripts\\run-tui.bat                     : Buka antarmuka TUI interaktif (default)")
         print("  scripts\\run-tui.bat --server            : Jalankan API server langsung")
-        print("  scripts\\run-tui.bat --process-images    : Jalankan build gambar langsung (terima argumen)")
+        print("  scripts\\run-tui.bat --process-images    : Jalankan build gambar lokal langsung")
         print("  scripts\\run-tui.bat --build-ext         : Build browser extension langsung")
         return
 
@@ -504,7 +632,7 @@ def main():
         return
 
     if args.process_images:
-        run_cli_images(remaining)
+        run_cli_images()
         return
 
     if args.build_ext:
