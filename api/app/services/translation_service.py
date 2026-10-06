@@ -20,19 +20,18 @@ class TranslationError(RuntimeError):
 def validate_translations(
     dialogue_items: List[Dict[str, Any]], translations: Dict[int, str], engine: str
 ) -> Dict[int, str]:
-    """Require complete target-language text before changing any bubble."""
+    cleaned = {}
     for item in dialogue_items:
         bubble_id = item["id"]
         text = translations.get(bubble_id)
         if not isinstance(text, str) or not text.strip():
-            raise TranslationError(f"{engine} did not return a valid translation for bubble {bubble_id}.")
+            continue
         normalized = unicodedata.normalize("NFKC", text)
         if re.search(r'[\u3040-\u30ff\u3400-\u9fff]', normalized):
-            raise TranslationError(
-                f"{engine} returned untranslated Japanese text for bubble {bubble_id}. "
-                "The original image was not modified."
-            )
-    return translations
+            logger.warning("%s returned untranslated Japanese text for bubble %s.", engine, bubble_id)
+            continue
+        cleaned[bubble_id] = text
+    return cleaned
 
 
 def extract_json_from_text(text: str) -> Optional[dict]:
@@ -235,9 +234,7 @@ class MangaTranslationService:
 
                 for (b_id, _), translated_value in zip(batch, translated_values):
                     if not isinstance(translated_value, str) or not translated_value.strip():
-                        raise TranslationError(
-                            f"Google Translate did not return text for bubble {b_id}"
-                        )
+                        continue
                     translated_text = unicodedata.normalize("NFKC", translated_value).strip()
                     translated_text = re.sub(r"(?:\s*\.){2,}", "...", translated_text)
                     results[b_id] = translated_text
@@ -250,11 +247,6 @@ class MangaTranslationService:
         target_lang: str = "id",
         translator: str = "llm"
     ) -> List[DetectedBubble]:
-        """
-        Asynchronous batch translation of DetectedBubble objects in context.
-        Populates bubble.translation for each bubble.
-        Supports both 'llm' (OpenAI/Ollama) and 'google' (Google Translate).
-        """
         if not bubbles:
             return bubbles
 
@@ -270,13 +262,17 @@ class MangaTranslationService:
         if translator == "google":
             translations_map = await self._call_google_async(dialogue_items, target_lang=target_lang)
         else:
-            translations_map = await self._call_llm_async(dialogue_items, target_lang=target_lang)
+            try:
+                translations_map = await self._call_llm_async(dialogue_items, target_lang=target_lang)
+            except Exception as e:
+                logger.warning("LLM translation failed (%s), falling back to Google Translate", e)
+                translations_map = await self._call_google_async(dialogue_items, target_lang=target_lang)
 
-        validate_translations(dialogue_items, translations_map, "Google Translate" if translator == "google" else "LLM")
+        validated = validate_translations(dialogue_items, translations_map, "Google Translate" if translator == "google" else "LLM")
 
         for b in bubbles:
-            if b.id in translations_map:
-                b.translation = translations_map[b.id]
+            if b.id in validated:
+                b.translation = validated[b.id]
 
         return bubbles
 

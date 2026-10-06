@@ -347,21 +347,47 @@ class MangaTranslator {
     );
   }
 
-  getCacheSource(img) {
+  getCanonicalSource(img) {
+    if (img.dataset.mtOriginalSrc) return img.dataset.mtOriginalSrc;
     const state = this.responsiveImageStates.get(img);
-    if (this.hasTranslatedImageSource(img, state)) return state.originalSrc;
-    return (img.complete && img.naturalWidth > 0 ? this.getCurrentImageSource(img) : '') ||
-      img.dataset.src ||
-      img.dataset.lazySrc ||
-      img.dataset.original ||
-      img.currentSrc ||
-      img.src ||
-      '';
+    if (state?.originalSrc) return state.originalSrc;
+
+    const lazySrc = img.dataset.src || img.dataset.lazySrc || img.dataset.original || img.dataset.url || img.dataset.highres;
+    const current = img.currentSrc || img.src || '';
+
+    if (lazySrc && (!current || current.startsWith('data:') || current.startsWith('blob:') || current.includes('placeholder') || current.includes('blank'))) {
+      try {
+        return new URL(lazySrc, window.location.href).href;
+      } catch {
+        return lazySrc;
+      }
+    }
+
+    if (current && !current.startsWith('data:') && !current.startsWith('blob:')) {
+      try {
+        return new URL(current, window.location.href).href;
+      } catch {
+        return current;
+      }
+    }
+
+    if (lazySrc) {
+      try {
+        return new URL(lazySrc, window.location.href).href;
+      } catch {
+        return lazySrc;
+      }
+    }
+
+    return current;
+  }
+
+  getCacheSource(img) {
+    return this.getCanonicalSource(img);
   }
 
   hasTranslatedImageSource(img, state = this.responsiveImageStates.get(img)) {
-    return Boolean(state?.appliedSrc && img.getAttribute('src') === state.appliedSrc &&
-      !img.hasAttribute('srcset') && state.sources.every(({ source }) => !source.hasAttribute('srcset')));
+    return Boolean(state?.appliedSrc && (img.src === state.appliedSrc || img.getAttribute('src') === state.appliedSrc));
   }
 
   getImageSourceSignature(img, includeCurrentSrc = true) {
@@ -381,56 +407,82 @@ class MangaTranslator {
     if (this.hasTranslatedImageSource(img, previous)) return previous;
     const picture = img.parentElement?.tagName === 'PICTURE' ? img.parentElement : null;
     const state = {
-      originalSrc: this.getCacheSource(img),
+      originalSrc: this.getCanonicalSource(img),
       attributes: ['src', 'srcset', 'sizes'].map(name => [name, img.getAttribute(name)]),
+      dataAttributes: {},
       sources: picture ? Array.from(picture.querySelectorAll('source')).map(source => ({
         source, attributes: ['srcset', 'sizes'].map(name => [name, source.getAttribute(name)])
       })) : [],
       appliedSrc: null
     };
+
+    ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-highres'].forEach(attr => {
+      if (img.hasAttribute(attr)) {
+        state.dataAttributes[attr] = img.getAttribute(attr);
+      }
+    });
+
     this.responsiveImageStates.set(img, state);
     return state;
   }
 
   setTranslatedImageSource(img, imageUrl) {
     const state = this.captureImageSource(img);
-    img.removeAttribute('srcset');
-    img.removeAttribute('sizes');
-    state.sources.forEach(({ source }) => source.removeAttribute('srcset'));
-    img.dataset.mtOriginalSrc = state.originalSrc;
-    img.src = imageUrl;
-    state.appliedSrc = imageUrl;
+    this.isSelfMutating = true;
+    try {
+      img.removeAttribute('srcset');
+      img.removeAttribute('sizes');
+      state.sources.forEach(({ source }) => {
+        source.removeAttribute('srcset');
+        source.srcset = imageUrl;
+      });
+      img.dataset.mtOriginalSrc = state.originalSrc;
+      img.dataset.mtTranslated = '1';
+      img.src = imageUrl;
+      state.appliedSrc = imageUrl;
+
+      ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-highres'].forEach(attr => {
+        if (img.hasAttribute(attr)) {
+          img.setAttribute(attr, imageUrl);
+        }
+      });
+    } finally {
+      setTimeout(() => { this.isSelfMutating = false; }, 50);
+    }
   }
 
   restoreImageSource(img) {
     const state = this.responsiveImageStates.get(img);
-    if (this.hasTranslatedImageSource(img, state)) {
+    if (state) {
       const restoreAttributes = (element, attributes) => attributes.forEach(([name, value]) => {
         if (value === null) element.removeAttribute(name);
         else element.setAttribute(name, value);
       });
       restoreAttributes(img, state.attributes);
       state.sources.forEach(({ source, attributes }) => restoreAttributes(source, attributes));
+      if (state.dataAttributes) {
+        Object.entries(state.dataAttributes).forEach(([attr, val]) => {
+          if (val === null) img.removeAttribute(attr);
+          else img.setAttribute(attr, val);
+        });
+      }
     }
     this.responsiveImageStates.delete(img);
     delete img.dataset.mtOriginalSrc;
+    delete img.dataset.mtTranslated;
   }
 
-  getImageCacheDescriptor(img, settings, knownIndex = null) {
-    const originalSrc = this.getCacheSource(img);
-    const imageIndex = knownIndex === null ? this.getPageImages().indexOf(img) : knownIndex;
+  getImageCacheDescriptor(img, settings) {
+    const canonicalSrc = this.getCanonicalSource(img);
     const cache = window.MangaTranslationCache;
 
     return {
       img,
-      originalSrc,
-      sourceSignature: this.getImageSourceSignature(img),
-      imageIndex,
+      originalSrc: canonicalSrc,
       cacheKey: cache ? cache.buildCacheKey(
         settings,
-        originalSrc,
-        window.location.href,
-        imageIndex
+        canonicalSrc,
+        window.location.href
       ) : ''
     };
   }
@@ -441,7 +493,7 @@ class MangaTranslator {
 
     const candidates = new Set(candidateImages || []);
     const descriptors = this.getPageImages()
-      .map((img, imageIndex) => this.getImageCacheDescriptor(img, settings, imageIndex))
+      .map(img => this.getImageCacheDescriptor(img, settings))
       .filter(({ img, originalSrc }) =>
         candidates.has(img) && this.canProcessImage(img) && Boolean(originalSrc)
       );
@@ -456,14 +508,9 @@ class MangaTranslator {
     let restored = 0;
     for (const descriptor of descriptors) {
       if (!this.isEnabled || generation !== this.operationGeneration) break;
-      if (!descriptor.img.isConnected || !this.canProcessImage(descriptor.img) ||
-          descriptor.sourceSignature !== this.getImageSourceSignature(descriptor.img)) continue;
+      if (!descriptor.img.isConnected || !this.canProcessImage(descriptor.img)) continue;
       const cached = cachedEntries.get(descriptor.cacheKey);
-      if (!cached || cache.normalizeUrlForKey(cached.originalSrc, true) !==
-          cache.normalizeUrlForKey(descriptor.originalSrc, true)) continue;
-      const originalWidth = cached && cached.originalWidth || descriptor.img.naturalWidth;
-      const originalHeight = cached && cached.originalHeight || descriptor.img.naturalHeight;
-      if (!this.isMangaDimensions(originalWidth, originalHeight)) continue;
+      if (!cached) continue;
 
       const imageUrl = cache.createImageUrl(cached);
       if (!imageUrl) continue;
@@ -604,19 +651,16 @@ class MangaTranslator {
     const settings = { ...(this.settings || await this.loadSettings()) };
     if (!this.isEnabled || generation !== this.operationGeneration || !img.isConnected) return;
     const descriptor = this.getImageCacheDescriptor(img, settings);
-    const originalSrc = this.getCurrentImageSource(img);
+    const originalSrc = descriptor.originalSrc;
     const job = {
       id: jobId,
       img,
       originalSrc,
-      sourceSignature: this.getImageSourceSignature(img),
       generation,
       settings,
       originalWidth: img.naturalWidth,
       originalHeight: img.naturalHeight,
-      cacheKey: window.MangaTranslationCache
-        ? window.MangaTranslationCache.buildCacheKey(settings, originalSrc, window.location.href, descriptor.imageIndex)
-        : descriptor.cacheKey
+      cacheKey: descriptor.cacheKey
     };
     this.failedImages.delete(img);
     this.pendingImages.add(img);
@@ -633,14 +677,6 @@ class MangaTranslator {
       const result = await this.translateImage(job);
       const isCurrentJob = this.activeJobs.get(jobId) === job && img.dataset.mtJobId === jobId;
       if (!isCurrentJob || generation !== this.operationGeneration || !img.isConnected) return;
-
-      if (this.getImageSourceSignature(img) !== job.sourceSignature) {
-        delete img.dataset.mtOriginalSrc;
-        delete img.dataset.mtCacheKey;
-        this.scheduleScan();
-        console.warn('[MangaTranslator] Image source changed while translating; stale result ignored.');
-        return;
-      }
 
       if (result.success && result.data) {
         if (img.dataset.mtCacheObjectUrl && window.MangaTranslationCache) {
@@ -843,8 +879,7 @@ class MangaTranslator {
     if (!job || typeof dataUrl !== 'string' || !dataUrl) return;
     const { img, settings, originalSrc, originalWidth, originalHeight, cacheKey } = job;
     if (job.generation !== this.operationGeneration || !img.isConnected ||
-        this.latestContextJobs.get(img) !== jobId ||
-        job.sourceSignature !== this.getImageSourceSignature(img)) return;
+        this.latestContextJobs.get(img) !== jobId) return;
     if (img.dataset.mtCacheObjectUrl && window.MangaTranslationCache) {
       window.MangaTranslationCache.revokeImageUrl(img.dataset.mtCacheObjectUrl);
       delete img.dataset.mtCacheObjectUrl;
@@ -1055,19 +1090,25 @@ class MangaTranslator {
   setupMutationObserver() {
     if (this.imageObserver) return;
     const observer = new MutationObserver((mutations) => {
-      if (!this.isEnabled) return;
+      if (!this.isEnabled || this.isSelfMutating) return;
       let hasNewImages = false;
       for (const mutation of mutations) {
         if (mutation.type === 'attributes' && ['IMG', 'SOURCE'].includes(mutation.target.nodeName)) {
-          const images = mutation.target.nodeName === 'IMG'
-            ? [mutation.target] : Array.from(mutation.target.parentElement?.querySelectorAll('img') || []);
-          images.forEach(img => {
-            if (this.processedImages.has(img) && !this.hasTranslatedImageSource(img)) {
-              this.processedImages.delete(img);
-              this.totalProcessed = Math.max(0, this.totalProcessed - 1);
+          const img = mutation.target.nodeName === 'IMG'
+            ? mutation.target : mutation.target.parentElement?.querySelector('img');
+          if (!img) continue;
+
+          if (this.processedImages.has(img) && img.dataset.mtTranslated === '1') {
+            const state = this.responsiveImageStates.get(img);
+            if (state && state.appliedSrc && img.src !== state.appliedSrc) {
+              img.src = state.appliedSrc;
             }
-          });
-          hasNewImages = true;
+            continue;
+          }
+
+          if (this.canProcessImage(img)) {
+            hasNewImages = true;
+          }
           continue;
         }
         for (const node of mutation.addedNodes) {
@@ -1078,7 +1119,7 @@ class MangaTranslator {
         }
       }
       if (hasNewImages) {
-        this.scheduleScan(1000);
+        this.scheduleScan(600);
       }
     });
     observer.observe(document.body, {
@@ -1097,76 +1138,55 @@ class MangaTranslator {
         !img.closest('.manga-translator-minimal-loader') &&
         this.canProcessImage(img)
       ) {
-        this.scheduleScan();
+        this.scheduleScan(300);
       }
     }, true);
   }
 
-  createImageReadinessError(message, code) {
-    const error = new Error(message);
-    error.code = code;
-    return error;
+  async waitForImageReady(img, timeoutMs = 15000) {
+    if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+      try {
+        await img.decode();
+      } catch {}
+      return;
+    }
+
+    await new Promise((resolve, reject) => {
+      let timeoutId = null;
+      const cleanup = () => {
+        img.removeEventListener('load', onLoad);
+        img.removeEventListener('error', onError);
+        if (timeoutId) clearTimeout(timeoutId);
+      };
+      const onLoad = async () => {
+        cleanup();
+        try {
+          await img.decode();
+        } catch {}
+        resolve();
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error('Image failed to load on page.'));
+      };
+
+      img.addEventListener('load', onLoad, { once: true });
+      img.addEventListener('error', onError, { once: true });
+      timeoutId = setTimeout(() => {
+        cleanup();
+        if (img.complete && img.naturalWidth > 0) resolve();
+        else reject(new Error('Timed out waiting for image load.'));
+      }, timeoutMs);
+    });
   }
 
-  async waitForImageReady(img, expectedSrc, timeoutMs = 20000) {
-    const initialSrc = this.getCurrentImageSource(img);
-    if (!initialSrc || (expectedSrc && initialSrc !== expectedSrc)) {
-      throw this.createImageReadinessError(
-        'Image source changed before it was ready.',
-        'IMAGE_SOURCE_CHANGED'
-      );
+  async getImageDataUrl(img, canonicalSrc) {
+    if (canonicalSrc && canonicalSrc.startsWith('data:')) {
+      return canonicalSrc;
     }
 
-    if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) {
-      await new Promise((resolve, reject) => {
-        let timeoutId = null;
-        const cleanup = () => {
-          img.removeEventListener('load', onLoad);
-          img.removeEventListener('error', onError);
-          if (timeoutId) clearTimeout(timeoutId);
-        };
-        const onLoad = () => {
-          cleanup();
-          resolve();
-        };
-        const onError = () => {
-          cleanup();
-          reject(this.createImageReadinessError('Image failed to load.', 'IMAGE_NOT_READY'));
-        };
+    await this.waitForImageReady(img);
 
-        img.addEventListener('load', onLoad, { once: true });
-        img.addEventListener('error', onError, { once: true });
-        timeoutId = setTimeout(() => {
-          cleanup();
-          reject(this.createImageReadinessError('Timed out waiting for image load.', 'IMAGE_NOT_READY'));
-        }, timeoutMs);
-      });
-    }
-
-    try {
-      await img.decode();
-    } catch (error) {
-      throw this.createImageReadinessError(
-        `Image could not be decoded: ${error.message}`,
-        'IMAGE_NOT_READY'
-      );
-    }
-
-    const decodedSrc = this.getCurrentImageSource(img);
-    if (expectedSrc && decodedSrc !== expectedSrc) {
-      throw this.createImageReadinessError(
-        'Image source changed while it was decoding.',
-        'IMAGE_SOURCE_CHANGED'
-      );
-    }
-    if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) {
-      throw this.createImageReadinessError('Image is not fully decoded.', 'IMAGE_NOT_READY');
-    }
-    return decodedSrc;
-  }
-
-  async getImageDataUrl(img, expectedSrc) {
-    const decodedSrc = await this.waitForImageReady(img, expectedSrc);
     try {
       const canvas = document.createElement('canvas');
       canvas.width = img.naturalWidth;
@@ -1176,19 +1196,21 @@ class MangaTranslator {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
-      const imageDataUrl = canvas.toDataURL('image/jpeg', 0.9);
-      if (this.getCurrentImageSource(img) !== decodedSrc) {
-        throw this.createImageReadinessError(
-          'Image source changed while canvas was being created.',
-          'IMAGE_SOURCE_CHANGED'
-        );
+      return canvas.toDataURL('image/jpeg', 0.95);
+    } catch {
+      const fetchTarget = canonicalSrc || this.getCanonicalSource(img) || img.currentSrc || img.src;
+      if (fetchTarget && fetchTarget.startsWith('blob:')) {
+        const blob = await fetch(fetchTarget).then(r => r.blob());
+        return await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('Failed to read blob'));
+          reader.readAsDataURL(blob);
+        });
       }
-      return imageDataUrl;
-    } catch (e) {
-      if (e && (e.code === 'IMAGE_NOT_READY' || e.code === 'IMAGE_SOURCE_CHANGED')) throw e;
-      const result = await this.sendMessage({ action: 'fetchImage', url: decodedSrc });
-      if (result.success) return result.data;
-      throw new Error('Cannot access image: ' + e.message);
+      const result = await this.sendMessage({ action: 'fetchImage', url: fetchTarget });
+      if (result.success && result.data) return result.data;
+      throw new Error('Cannot access image: ' + (result.error || 'Failed to capture image data.'));
     }
   }
 

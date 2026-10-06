@@ -19,7 +19,8 @@ from app.core.config import settings
 from app.core.image_worker import run_image_task, stream_with_heartbeats
 from app.services.detector import sort_manga_reading_order
 from app.services.ocr_service import get_ocr_service
-from app.services.translation_service import TranslationError, get_translation_service
+from app.services.translation_service import get_translation_service
+from app.services.translation_filters import is_graphic_text, usable_translation
 from app.services.inpainting_service import MangaInpaintingService
 from app.services.typesetting_service import MangaTypesettingService
 
@@ -55,17 +56,6 @@ def recognize_bubbles(image, bubbles):
     return get_ocr_service(device="gpu").recognize_all_bubbles(image, bubbles)
 
 
-def require_bubble_text(bubbles, translated=False):
-    field = "translation" if translated else "text"
-    missing = [str(b.id) for b in bubbles if not (getattr(b, field) or "").strip()]
-    if missing:
-        stage = "Translation" if translated else "OCR"
-        raise TranslationError(
-            f"{stage} returned empty text for bubble(s): {', '.join(missing)}. "
-            "The original image was not modified."
-        )
-
-
 def encode_image(image):
     out_buf = io.BytesIO()
     image.convert("RGB").save(out_buf, format="JPEG", quality=95)
@@ -93,8 +83,10 @@ async def translate_manga_page(
     )
     ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles)
 
-    trans_service = get_translation_service()
-    ordered_bubbles = await trans_service.translate_bubbles_async(ordered_bubbles, target_lang=target_lang)
+    candidates = [b for b in ordered_bubbles if (b.text or "").strip() and not is_graphic_text(b.text)]
+    if candidates:
+        trans_service = get_translation_service()
+        await trans_service.translate_bubbles_async(candidates, target_lang=target_lang)
 
     duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
@@ -179,25 +171,27 @@ async def inpaint_and_translate_manga_page(
         detect_page, image, reading_direction, include_seg=True
     )
 
+    active_bubbles = []
     if typeset and ordered_bubbles:
         ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles)
-        require_bubble_text(ordered_bubbles)
+        candidates = [b for b in ordered_bubbles if (b.text or "").strip() and not is_graphic_text(b.text)]
 
-        trans_service = get_translation_service()
-        ordered_bubbles = await trans_service.translate_bubbles_async(
-            ordered_bubbles, target_lang=target_lang, translator=translator
-        )
-        require_bubble_text(ordered_bubbles, translated=True)
+        if candidates:
+            trans_service = get_translation_service()
+            await trans_service.translate_bubbles_async(
+                candidates, target_lang=target_lang, translator=translator
+            )
+            active_bubbles = [b for b in candidates if usable_translation(b.translation or "")]
 
     inpaint_service = MangaInpaintingService()
     inpainted_img = await run_image_task(
-        inpaint_service.inpaint, image, seg_mask=seg_mask, bubbles=ordered_bubbles
+        inpaint_service.inpaint, image, seg_mask=seg_mask, bubbles=active_bubbles or ordered_bubbles
     )
 
-    if typeset and ordered_bubbles:
+    if typeset and active_bubbles:
         typeset_service = MangaTypesettingService(all_caps=all_caps)
         final_img = await run_image_task(
-            typeset_service.typeset, inpainted_img, ordered_bubbles, font_scale=font_scale
+            typeset_service.typeset, inpainted_img, active_bubbles, font_scale=font_scale
         )
     else:
         final_img = inpainted_img
@@ -270,6 +264,7 @@ async def inpaint_stream_manga_page(
                 detect_page, image, reading_direction, include_seg=True
             )
 
+            active_bubbles = []
             if typeset and ordered_bubbles:
                 yield json.dumps({
                     "stage": "ocr",
@@ -279,20 +274,28 @@ async def inpaint_stream_manga_page(
                 await asyncio.sleep(0.01)
 
                 ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles)
-                require_bubble_text(ordered_bubbles)
+                candidates = [b for b in ordered_bubbles if (b.text or "").strip() and not is_graphic_text(b.text)]
 
-                yield json.dumps({
-                    "stage": "translate",
-                    "message": f"Translating {len(ordered_bubbles)} dialogues...",
-                    "total_bubbles": len(ordered_bubbles)
-                }) + "\n"
-                await asyncio.sleep(0.01)
+                if candidates:
+                    yield json.dumps({
+                        "stage": "translate",
+                        "message": f"Translating {len(candidates)} dialogues...",
+                        "total_bubbles": len(candidates)
+                    }) + "\n"
+                    await asyncio.sleep(0.01)
 
-                trans_service = get_translation_service()
-                ordered_bubbles = await trans_service.translate_bubbles_async(
-                    ordered_bubbles, target_lang=target_lang, translator=translator
-                )
-                require_bubble_text(ordered_bubbles, translated=True)
+                    trans_service = get_translation_service()
+                    await trans_service.translate_bubbles_async(
+                        candidates, target_lang=target_lang, translator=translator
+                    )
+                    active_bubbles = [b for b in candidates if usable_translation(b.translation or "")]
+                else:
+                    yield json.dumps({
+                        "stage": "translate",
+                        "message": "No translatable text found...",
+                        "total_bubbles": 0
+                    }) + "\n"
+                    await asyncio.sleep(0.01)
             else:
                 yield json.dumps({
                     "stage": "ocr",
@@ -306,16 +309,16 @@ async def inpaint_stream_manga_page(
 
             inpaint_service = MangaInpaintingService()
             inpainted_img = await run_image_task(
-                inpaint_service.inpaint, image, seg_mask=seg_mask, bubbles=ordered_bubbles
+                inpaint_service.inpaint, image, seg_mask=seg_mask, bubbles=active_bubbles or ordered_bubbles
             )
 
             yield json.dumps({"stage": "render", "message": "Rendering and typesetting text..."}) + "\n"
             await asyncio.sleep(0.01)
 
-            if typeset and ordered_bubbles:
+            if typeset and active_bubbles:
                 typeset_service = MangaTypesettingService(all_caps=all_caps)
                 final_img = await run_image_task(
-                    typeset_service.typeset, inpainted_img, ordered_bubbles, font_scale=font_scale
+                    typeset_service.typeset, inpainted_img, active_bubbles, font_scale=font_scale
                 )
             else:
                 final_img = inpainted_img

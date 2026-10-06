@@ -45,13 +45,17 @@ const MangaTranslationCache = {
     const lang = (settings && settings.targetLang) || 'id';
     const translator = (settings && settings.translator) || 'google';
     const direction = (settings && settings.readingDirection) || 'rtl';
-    const page = this.normalizeUrlForKey(pageUrl, true);
-    const source = this.normalizeUrlForKey(originalSrc, true);
-    const detector = (settings && settings.detectorType) || 'hybrid';
     const fontScale = (settings && settings.fontScale) ?? 1.0;
     const allCaps = (settings && settings.allCaps) ?? true;
     const apiUrl = (settings && settings.apiUrl) || 'http://127.0.0.1:8000';
-    return `v6_${JSON.stringify([lang, translator, direction, detector, fontScale, allCaps, apiUrl, page, imageIndex, source])}`;
+    const source = this.normalizeUrlForKey(originalSrc, true);
+
+    if (source && (source.startsWith('http://') || source.startsWith('https://'))) {
+      return `v7_${JSON.stringify([lang, translator, direction, fontScale, allCaps, apiUrl, source])}`;
+    }
+
+    const page = this.normalizeUrlForKey(pageUrl, false);
+    return `v7_fallback_${JSON.stringify([lang, translator, direction, fontScale, allCaps, apiUrl, page, imageIndex, source])}`;
   },
 
   async getCachedTranslation(cacheKey) {

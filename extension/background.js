@@ -79,7 +79,8 @@ async function apiRequest(endpoint, options = {}) {
 }
 
 function base64ToBlob(base64, mimeType = 'image/jpeg') {
-  const byteCharacters = atob(base64.split(',')[1]);
+  const raw = base64.includes(',') ? base64.split(',')[1] : base64;
+  const byteCharacters = atob(raw);
   const byteArrays = [];
   
   for (let offset = 0; offset < byteCharacters.length; offset += 512) {
@@ -250,14 +251,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
       else if (request.action === 'fetchImage') {
         try {
-          const imgRes = await fetch(request.url);
+          const fetchHeaders = { 'Accept': 'image/*' };
+          if (sender.tab && sender.tab.url) {
+            fetchHeaders['Referer'] = sender.tab.url;
+          }
+          const imgRes = await fetch(request.url, { headers: fetchHeaders });
           if (!imgRes.ok) {
             throw new Error(`Image request failed with HTTP ${imgRes.status}`);
           }
           const blob = await imgRes.blob();
-          if (!blob.type.startsWith('image/')) {
-            throw new Error(`Unexpected image response type: ${blob.type || 'unknown'}`);
-          }
           const reader = new FileReader();
           const dataUrl = await new Promise((resolve, reject) => {
             reader.onloadend = () => resolve(reader.result);
