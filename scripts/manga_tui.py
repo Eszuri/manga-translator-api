@@ -121,7 +121,7 @@ def cleanup_all_processes(wait_extension: bool = True) -> None:
     ACTIVE_CHILD_PIDS.clear()
 
 
-def win32_ctrl_handler(ctrl_type: int) -> bool:
+def win32_ctrl_handler(_ctrl_type: int) -> bool:
     """Menangani event close terminal / shutdown dari OS Windows."""
     cleanup_all_processes(wait_extension=True)
     return False
@@ -141,7 +141,7 @@ def setup_process_lifecycle() -> None:
         except Exception:
             pass
 
-    def _sig_handler(signum, frame):
+    def _sig_handler(_signum, _frame):
         cleanup_all_processes(wait_extension=True)
         sys.exit(0)
 

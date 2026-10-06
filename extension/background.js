@@ -48,13 +48,13 @@ async function apiRequest(endpoint, options = {}) {
       try {
         const errJson = await res.json();
         if (errJson.detail) errorMsg = formatApiError(errJson.detail, res.status);
-      } catch (e) {}
+      } catch {}
       return { success: false, error: errorMsg };
     }
     
     if (expectBlob) {
       const blob = await res.blob();
-      return new Promise((resolve, reject) => {
+      return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => {
           resolve({ success: true, data: reader.result });
@@ -171,7 +171,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             try {
               const err = await res.json();
               if (err.detail) errorMsg = formatApiError(err.detail, res.status);
-            } catch (e) {}
+            } catch {}
             sendResponse({ success: false, error: errorMsg });
             return;
           }

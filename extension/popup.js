@@ -26,7 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
           loadSiteStatus(currentDomain);
           return;
         }
-      } catch (e) {}
+      } catch {}
     }
     siteHostname.textContent = 'This page';
     siteToggle.disabled = true;
@@ -84,7 +84,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btnTranslate.style.opacity = '0.6';
     statStatus.textContent = 'Processing...';
 
-    chrome.tabs.sendMessage(tab.id, { action: 'translateAllImages' }, (response) => {
+    chrome.tabs.sendMessage(tab.id, { action: 'translateAllImages' }, () => {
       setTimeout(() => {
         btnTranslate.disabled = false;
         btnTranslate.style.opacity = '1';

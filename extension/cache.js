@@ -35,7 +35,7 @@ const MangaTranslationCache = {
     try {
       const url = new URL(value, window.location.href);
       return `${url.origin}${url.pathname}${keepSearch ? url.search : ''}`;
-    } catch (error) {
+    } catch {
       const withoutHash = String(value).split('#')[0];
       return keepSearch ? withoutHash : withoutHash.split('?')[0];
     }

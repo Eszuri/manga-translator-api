@@ -34,7 +34,7 @@ async def _run_native_task(executor, function, *args, **kwargs):
             lease.finish_task()
         raise
     if lease is not None:
-        future.add_done_callback(lambda completed: lease.finish_task())
+        future.add_done_callback(lambda _: lease.finish_task())
     return await asyncio.wrap_future(future)
 
 

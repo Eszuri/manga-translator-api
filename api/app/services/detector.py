@@ -43,7 +43,6 @@ class BaseBubbleDetector(ABC):
     @abstractmethod
     def detect(self, image: Image.Image) -> List[DetectedBubble]:
         """Detect speech bubbles from a PIL Image."""
-        pass
 
 
 def annotate_and_save_bubbles(
