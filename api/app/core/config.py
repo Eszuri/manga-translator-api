@@ -47,13 +47,13 @@ class Settings(BaseModel):
     VERSION: str = "1.0.0"
     API_V1_PREFIX: str = "/api/v1"
     
-    HOST: str = os.getenv("API_HOST", "127.0.0.1")
+    HOST: str = os.getenv("API_HOST", "0.0.0.0")
     PORT: int = Field(default=int(os.getenv("API_PORT", "8000")), ge=1, le=65535)
     DEBUG: bool = env_bool("API_DEBUG")
     RELOAD: bool = env_bool("API_RELOAD", DEBUG)
 
     ALLOWED_ORIGINS: List[str] = parse_origins(
-        os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+        os.getenv("ALLOWED_ORIGINS", "*")
     )
     CORS_ALLOW_CREDENTIALS: bool = env_bool("CORS_ALLOW_CREDENTIALS")
 

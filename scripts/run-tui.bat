@@ -1,6 +1,10 @@
 @echo off
 setlocal
+chcp 65001 >nul
 set "PYTHONDONTWRITEBYTECODE=1"
+set "PYTHONUNBUFFERED=1"
+set "PYTHONIOENCODING=utf-8"
+set "PYTHONUTF8=1"
 pushd "%~dp0\.." || exit /b 1
 
 if not exist ".venv\Scripts\python.exe" (

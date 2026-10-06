@@ -9,9 +9,11 @@ import argparse
 import asyncio
 import atexit
 import ctypes
+import ipaddress
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -169,6 +171,33 @@ def get_server_port() -> str:
         except Exception:
             pass
     return "8000"
+
+
+def get_network_access_urls(port: str) -> dict[str, list[str]]:
+    """Mendeteksi URL akses Localhost, LAN, dan Tailscale untuk multi-device."""
+    urls: dict[str, list[str]] = {
+        "local": [f"http://127.0.0.1:{port}"],
+        "lan": [],
+        "tailscale": [],
+    }
+    try:
+        hostname = socket.gethostname()
+        for item in socket.getaddrinfo(hostname, None):
+            if item[0] == socket.AF_INET:
+                ip = item[4][0]
+                if ip.startswith("127."):
+                    continue
+                ip_obj = ipaddress.IPv4Address(ip)
+                url = f"http://{ip}:{port}"
+                if ip_obj in ipaddress.IPv4Network("100.64.0.0/10"):
+                    if url not in urls["tailscale"]:
+                        urls["tailscale"].append(url)
+                elif ip_obj.is_private:
+                    if url not in urls["lan"]:
+                        urls["lan"].append(url)
+    except Exception:
+        pass
+    return urls
 
 
 def find_chromium_browser() -> str | None:
@@ -412,13 +441,20 @@ class MangaTranslatorTUI(App):
 
     @work(exclusive=True, group="server_group")
     async def start_server(self) -> None:
-        if self.server_proc and self.server_proc.returncode is None:
-            return
-
+        net_urls = get_network_access_urls(self.port)
         self.log_msg(f"[green]Starting Server (:{self.port})...[/green]")
+        self.log_msg(f"[dim]  ● Local: {net_urls['local'][0]}[/dim]")
+        for lan in net_urls["lan"]:
+            self.log_msg(f"[cyan]  ● LAN: {lan}[/cyan]")
+        for ts in net_urls["tailscale"]:
+            self.log_msg(f"[magenta]  ● Tailscale: {ts}[/magenta]")
+
         try:
             env = os.environ.copy()
             env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["PYTHONUNBUFFERED"] = "1"
+            env["PYTHONIOENCODING"] = "utf-8"
+            env["PYTHONUTF8"] = "1"
             cmd = [str(PYTHON_EXE), "-m", "tools.run_local"]
             self.server_proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -512,6 +548,9 @@ class MangaTranslatorTUI(App):
         try:
             env = os.environ.copy()
             env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["PYTHONUNBUFFERED"] = "1"
+            env["PYTHONIOENCODING"] = "utf-8"
+            env["PYTHONUTF8"] = "1"
             self.worker_proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(API_DIR),
@@ -619,6 +658,9 @@ def run_cli_server():
     print("Menjalankan API Server lokal...")
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     proc = subprocess.Popen([str(PYTHON_EXE), "-m", "tools.run_local"], cwd=str(API_DIR), env=env)
     ACTIVE_CHILD_PIDS.add(proc.pid)
     try:
@@ -644,6 +686,9 @@ def run_cli_images():
     print(f"Memproses gambar: {' '.join(cmd[1:])}")
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     proc = subprocess.Popen(cmd, cwd=str(API_DIR), env=env)
     ACTIVE_CHILD_PIDS.add(proc.pid)
     try:
