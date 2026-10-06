@@ -25,29 +25,31 @@ models/                  Model deteksi dan OCR lokal
 assets/branding/         Icon extension
 docs/                    Dokumentasi
 scripts/
-  process-images.bat     Proses gambar dari api/Images/original Images
-  build-extension.bat    Build extension
-  start-server.bat       Start server lokal
+  manga_tui.py         Control Center TUI & unified runner Python
+  run-tui.bat          Launcher tunggal Windows
 dist/                    Paket hasil build extension
 ```
 
 ## Shortcut Windows
 
-| Keperluan | File |
+Semua fungsi (server, proses gambar, build extension) terpusat pada launcher tunggal:
+
+| Keperluan | Perintah |
 | --- | --- |
-| Control Center TUI (Semua Fitur) | `scripts\run-tui.bat` |
-| Server lokal Windows | `scripts\start-server.bat` |
-| Proses gambar lokal | `scripts\process-images.bat` |
-| Build extension | `scripts\build-extension.bat` |
+| **Control Center TUI (Rekomendasi)** | `scripts\run-tui.bat` |
+| Jalankan Server langsung | `scripts\run-tui.bat --server` |
+| Proses gambar lokal langsung | `scripts\run-tui.bat --process-images` |
+| Build extension langsung | `scripts\run-tui.bat --build-ext` |
 
 ## Menjalankan Backend
 
-Siapkan `api/.env`, model, dan environment `.venv` terlebih dahulu. Jalankan
-server dari terminal:
+Siapkan `api/.env`, model, dan environment `.venv` terlebih dahulu. Buka TUI:
 
 ```powershell
-scripts\start-server.bat
+scripts\run-tui.bat
 ```
+*(Lalu tekan tombol **`1`** untuk memulai server, atau jalankan langsung `scripts\run-tui.bat --server`)*
+
 
 Periksa API:
 
@@ -69,11 +71,11 @@ Dokumentasi endpoint interaktif tersedia di `http://127.0.0.1:8000/docs`.
 Untuk mem-build extension (.crx / .zip):
 
 ```powershell
-scripts\build-extension.bat
+scripts\run-tui.bat --build-ext
 ```
 
-Script memakai PowerShell bawaan Windows; Python tidak diperlukan untuk build extension.
-CRX dibuat otomatis jika browser Chromium (Chrome, Edge, atau Brave) ditemukan. Hasil berada di `dist`.
+*(Atau buka `scripts\run-tui.bat` dan tekan tombol **`3`**).*
+Hasil paket (`.zip` dan `.crx`) otomatis dibuat di folder `dist`.
 
 ## Bagaimana Gambar Diproses
 
@@ -120,14 +122,16 @@ Folder `models` harus berisi:
 Masukkan JPEG, PNG, atau WebP ke `api/Images/original Images`. Contoh memproses satu gambar:
 
 ```powershell
-scripts\process-images.bat --limit 1
+scripts\run-tui.bat --process-images --limit 1
 ```
 
 Gunakan opsi `--image "nama.jpg"` untuk memilih file tertentu:
 
 ```powershell
-scripts\process-images.bat --image "001.jpg"
+scripts\run-tui.bat --process-images --image "001.jpg"
 ```
+
+*(Atau buka `scripts\run-tui.bat` dan tekan tombol **`2`**).*
 
 Hasil proses akan tersimpan di `api/Images/build Images`: `Box`, `Text Box`, `OCR`, `translate`, `inpainting`, dan `render`.
 

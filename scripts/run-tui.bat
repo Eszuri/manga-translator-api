@@ -9,5 +9,5 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-.\.venv\Scripts\python.exe scripts\manga_tui.py
+.\.venv\Scripts\python.exe scripts\manga_tui.py %*
 popd
