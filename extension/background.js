@@ -321,12 +321,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       formData.append('file', imgBlob, 'image.jpg');
       formData.append('target_lang', settings.targetLang);
       formData.append('translator', settings.translator);
-      formData.append(
-        'detector_type',
-        settings.detectorType === 'comic_text_detector' ? 'comic_text_detector' : 'hybrid'
-      );
       formData.append('reading_direction', settings.readingDirection);
-      formData.append('device', 'gpu');
       formData.append('typeset', 'true');
       formData.append('font_scale', settings.fontScale.toString());
       formData.append('all_caps', settings.allCaps.toString());

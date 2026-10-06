@@ -715,11 +715,7 @@ class MangaTranslator {
         mimeType: 'image/jpeg',
         target_lang: settings.targetLang,
         translator: settings.translator || 'llm',
-        detector_type: settings.detectorType === 'comic_text_detector'
-          ? 'comic_text_detector'
-          : 'hybrid',
         reading_direction: settings.readingDirection,
-        device: 'gpu',
         typeset: 'true',
         font_scale: String(settings.fontScale),
         all_caps: String(settings.allCaps)

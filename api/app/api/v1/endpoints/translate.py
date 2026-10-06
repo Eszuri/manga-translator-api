@@ -15,7 +15,6 @@ from app.schemas import (
     TranslateDialoguesResponse,
     TranslatedDialogueItem
 )
-from app.core.gpu import require_gpu_device
 from app.core.config import settings
 from app.core.image_worker import run_image_task, stream_with_heartbeats
 from app.services.detector import sort_manga_reading_order
@@ -26,30 +25,21 @@ from app.services.typesetting_service import MangaTypesettingService
 
 router = APIRouter()
 
-_comic_detector = None
 _hybrid_detector = None
 
 
-def get_detector_instance(detector_type: str, device: str):
-    global _comic_detector, _hybrid_detector
-    require_gpu_device(device)
-    if detector_type == "comic_text_detector":
-        if _comic_detector is None:
-            from app.services.comic_text_detector import ComicTextDetector
-            _comic_detector = ComicTextDetector(device="gpu")
-        return _comic_detector
-    elif detector_type == "hybrid":
-        if _hybrid_detector is None:
-            from app.services.hybrid_detector import HybridBubbleDetector
-            from app.services.comic_text_detector import ComicTextDetector
-            comic_det = ComicTextDetector(device="gpu")
-            _hybrid_detector = HybridBubbleDetector(comic_detector=comic_det)
-        return _hybrid_detector
-    raise ValueError("GPU-only backend does not support the CPU contour detector.")
+def get_hybrid_detector():
+    global _hybrid_detector
+    if _hybrid_detector is None:
+        from app.services.hybrid_detector import HybridBubbleDetector
+        from app.services.comic_text_detector import ComicTextDetector
+        comic_det = ComicTextDetector(device="gpu")
+        _hybrid_detector = HybridBubbleDetector(comic_detector=comic_det)
+    return _hybrid_detector
 
 
-def detect_page(image, detector_type, device, reading_direction, include_seg=False):
-    detector = get_detector_instance(detector_type, device)
+def detect_page(image, reading_direction, include_seg=False):
+    detector = get_hybrid_detector()
     detected = detector.detect(image)
     bubbles = sort_manga_reading_order(detected, reading_direction=reading_direction)
     seg_mask = None
@@ -61,8 +51,8 @@ def detect_page(image, detector_type, device, reading_direction, include_seg=Fal
     return bubbles, seg_mask
 
 
-def recognize_bubbles(image, bubbles, device):
-    return get_ocr_service(device=device).recognize_all_bubbles(image, bubbles)
+def recognize_bubbles(image, bubbles):
+    return get_ocr_service(device="gpu").recognize_all_bubbles(image, bubbles)
 
 
 def require_bubble_text(bubbles, translated=False):
@@ -89,34 +79,19 @@ async def translate_manga_page(
         "id",
         description="Target translation language code ('id' for Indonesian, 'en' for English)"
     ),
-    detector_type: Literal["hybrid", "comic_text_detector"] = Form(
-        "hybrid",
-        description="Text/bubble detector engine ('hybrid' recommended for optimal accuracy)"
-    ),
     reading_direction: Literal["rtl", "ltr"] = Form(
         "rtl",
         description="Reading direction ('rtl' for Japanese Manga, 'ltr' for Manhwa)"
-    ),
-    device: Literal["gpu"] = Form(
-        "gpu",
-        description="GPU-only backend; the only accepted value is 'gpu'"
     )
 ):
-    """
-    Complete End-to-End Manga Translation Pipeline:
-    1. Speech Bubble & Text Detection (Hybrid AI + Balloon Segmentation).
-    2. Reading Order Sorting (Right-to-Left / Left-to-Right).
-    3. Japanese Text Recognition via Manga-OCR (ViT Transformer).
-    4. Contextual Dialogue Translation via OpenAI-compatible LLM (default: Indonesian).
-    """
     image = await read_validated_image(file)
 
     start_time = time.perf_counter()
 
     ordered_bubbles, _ = await run_image_task(
-        detect_page, image, detector_type, device, reading_direction
+        detect_page, image, reading_direction
     )
-    ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles, device)
+    ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles)
 
     trans_service = get_translation_service()
     ordered_bubbles = await trans_service.translate_bubbles_async(ordered_bubbles, target_lang=target_lang)
@@ -137,10 +112,6 @@ async def translate_manga_page(
 
 @router.post("/dialogues", response_model=TranslateDialoguesResponse)
 async def translate_dialogues(request: TranslateDialoguesRequest):
-    """
-    Direct contextual dialogue translation endpoint for client/extension.
-    Translates an array of pre-extracted dialogues in reading order.
-    """
     start_time = time.perf_counter()
     trans_service = get_translation_service()
 
@@ -179,17 +150,9 @@ async def inpaint_and_translate_manga_page(
         settings.DEFAULT_TRANSLATOR,
         description="Translation engine: 'llm' (OpenAI/Ollama) or 'google' (Google Translate)"
     ),
-    detector_type: Literal["hybrid", "comic_text_detector"] = Form(
-        "hybrid",
-        description="Text/bubble detector engine ('hybrid' recommended)"
-    ),
     reading_direction: Literal["rtl", "ltr"] = Form(
         "rtl",
         description="Reading direction ('rtl' for Japanese Manga, 'ltr' for Manhwa)"
-    ),
-    device: Literal["gpu"] = Form(
-        "gpu",
-        description="GPU-only backend; the only accepted value is 'gpu'"
     ),
     typeset: bool = Form(
         True,
@@ -208,26 +171,16 @@ async def inpaint_and_translate_manga_page(
         description="Output format: 'image' (raw JPEG image binary) or 'json' (base64 image + bubble metadata)"
     )
 ):
-    """
-    End-to-End Server-Side Inpainting & Typesetting Pipeline:
-    1. Speech Bubble & Text Detection.
-    2. Character Segmentation Mask Retrieval.
-    3. Japanese Dialogue Extraction (Manga-OCR).
-    4. Contextual Dialogue Translation (LLM - default: Indonesian).
-    5. Clean Text Inpainting / Erasure (Telea Inpainting on Dilated Character Mask).
-    6. Comic Font Typesetting with dynamic auto-fit font sizing and balanced word wrapping.
-    7. Returns rendered image binary stream or JSON with Base64 image and bubble details.
-    """
     image = await read_validated_image(file)
 
     start_time = time.perf_counter()
 
     ordered_bubbles, seg_mask = await run_image_task(
-        detect_page, image, detector_type, device, reading_direction, include_seg=True
+        detect_page, image, reading_direction, include_seg=True
     )
 
     if typeset and ordered_bubbles:
-        ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles, device)
+        ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles)
         require_bubble_text(ordered_bubbles)
 
         trans_service = get_translation_service()
@@ -288,17 +241,9 @@ async def inpaint_stream_manga_page(
         settings.DEFAULT_TRANSLATOR,
         description="Translation engine: 'llm' (OpenAI/Ollama) or 'google' (Google Translate)"
     ),
-    detector_type: Literal["hybrid", "comic_text_detector"] = Form(
-        "hybrid",
-        description="Text/bubble detector engine ('hybrid' recommended)"
-    ),
     reading_direction: Literal["rtl", "ltr"] = Form(
         "rtl",
         description="Reading direction ('rtl' for Japanese Manga, 'ltr' for Manhwa)"
-    ),
-    device: Literal["gpu"] = Form(
-        "gpu",
-        description="GPU-only backend; the only accepted value is 'gpu'"
     ),
     typeset: bool = Form(
         True,
@@ -313,10 +258,6 @@ async def inpaint_stream_manga_page(
         description="Render dialogue text in comic uppercase (default: True)"
     )
 ):
-    """
-    Streaming inpainting & typesetting endpoint:
-    Yields real-time NDJSON events for each stage (detect, ocr, translate, inpaint, render, done).
-    """
     image = await read_validated_image(file)
 
     async def stream_generator():
@@ -326,7 +267,7 @@ async def inpaint_stream_manga_page(
             await asyncio.sleep(0.01)
 
             ordered_bubbles, seg_mask = await run_image_task(
-                detect_page, image, detector_type, device, reading_direction, include_seg=True
+                detect_page, image, reading_direction, include_seg=True
             )
 
             if typeset and ordered_bubbles:
@@ -337,7 +278,7 @@ async def inpaint_stream_manga_page(
                 }) + "\n"
                 await asyncio.sleep(0.01)
 
-                ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles, device)
+                ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles)
                 require_bubble_text(ordered_bubbles)
 
                 yield json.dumps({

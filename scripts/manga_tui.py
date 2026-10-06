@@ -528,7 +528,7 @@ class MangaTranslatorTUI(App):
             self.log_msg(f"[red]No images found in: {IMAGES_ORIGINAL}[/red]")
             return
 
-        cmd = [str(PYTHON_EXE), "-m", "tools.build_local", "--device", "gpu"]
+        cmd = [str(PYTHON_EXE), "-m", "tools.build_local"]
         self.log_msg("[cyan]Processing images...[/cyan]")
         self.current_task = "Processing Images"
         self.update_status()
@@ -666,7 +666,7 @@ def run_cli_images():
         print(f"[FAILED] Tidak ada gambar JPEG, PNG, atau WebP di: {IMAGES_ORIGINAL}")
         sys.exit(1)
 
-    cmd = [str(PYTHON_EXE), "-m", "tools.build_local", "--device", "gpu"]
+    cmd = [str(PYTHON_EXE), "-m", "tools.build_local"]
     print(f"Memproses gambar: {' '.join(cmd[1:])}")
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"

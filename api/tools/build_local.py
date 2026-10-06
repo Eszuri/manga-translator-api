@@ -1,9 +1,3 @@
-"""Build local visual output from manga pages in ``Images/original Images``.
-
-This manual local builder uses the same Google translation implementation as
-the API and writes inspectable output for every pipeline stage.
-"""
-
 import argparse
 import asyncio
 import os
@@ -42,13 +36,10 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Build local manga output from original images")
-    parser.add_argument("--dir", type=Path, default=Path("Images/original Images"))
-    parser.add_argument("--output-root", type=Path, default=Path("Images/build Images"))
+    parser.add_argument("--input-dir", type=Path, default=Path("Images/original Images"))
+    parser.add_argument("--output-dir", type=Path, default=Path("Images/build Images"))
     parser.add_argument("--image", help="One input filename, e.g. 009.jpg")
     parser.add_argument("--limit", type=int, default=0, help="Pages to process; 0 means all")
-    parser.add_argument("--device", choices=("gpu",), default="gpu")
-    parser.add_argument("--detector", choices=("hybrid", "comic_text_detector"),
-                        default="hybrid")
     parser.add_argument("--target-lang", choices=("id", "en"), default="id")
     parser.add_argument("--font-scale", type=float, default=1.0)
     return parser.parse_args()
@@ -77,10 +68,8 @@ def select_images(directory: Path, name: str | None, limit: int) -> list[Path]:
     return images
 
 
-def make_detector(kind: str, device: str):
+def make_detector():
     comic_detector = ComicTextDetector(device="gpu")
-    if kind == "comic_text_detector":
-        return comic_detector
     return HybridBubbleDetector(comic_detector=comic_detector)
 
 
@@ -114,7 +103,6 @@ def wrap_pixels(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> l
 
 
 def transcript_image(image: Image.Image, bubbles, title: str, translated: bool) -> Image.Image:
-    """Show source page and per-box text together so OCR/translation is inspectable."""
     source = image.convert("RGB")
     panel_width = 530
     font = load_font(20)
@@ -150,21 +138,20 @@ def transcript_image(image: Image.Image, bubbles, title: str, translated: bool) 
     return canvas
 
 
-def create_stage_outputs(output_root: Path, stem: str) -> dict[str, Path]:
-    """Create stage folders once and return stable image paths for one page."""
+def create_stage_outputs(output_dir: Path, stem: str) -> dict[str, Path]:
     return {
-        stage: output_root / folder / f"{stem}.png"
+        stage: output_dir / folder / f"{stem}.png"
         for stage, folder in STAGE_FOLDERS.items()
     }
 
 
-def process_page(path: Path, output_root: Path, detector, ocr, translator,
+def process_page(path: Path, output_dir: Path, detector, ocr, translator,
                  inpainter, typesetter, args) -> dict:
     timings = {}
     stem = path.stem
     with Image.open(path) as original:
         image = original.convert("RGB")
-    outputs = create_stage_outputs(output_root, stem)
+    outputs = create_stage_outputs(output_dir, stem)
 
     start = time.perf_counter()
     bubbles = sort_manga_reading_order(detector.detect(image), reading_direction="rtl")
@@ -206,14 +193,14 @@ def process_page(path: Path, output_root: Path, detector, ocr, translator,
 
 def main() -> int:
     args = parse_args()
-    images = select_images(resolve_from_api(args.dir), args.image, args.limit)
-    output_root = resolve_from_api(args.output_root)
+    images = select_images(resolve_from_api(args.input_dir), args.image, args.limit)
+    output_dir = resolve_from_api(args.output_dir)
     for folder in STAGE_FOLDERS.values():
-        (output_root / folder).mkdir(parents=True, exist_ok=True)
+        (output_dir / folder).mkdir(parents=True, exist_ok=True)
 
-    print(f"Pages: {len(images)} | device: {args.device} | translation: Google")
-    print(f"Output: {output_root}")
-    detector = make_detector(args.detector, args.device)
+    print(f"Pages: {len(images)} | device: gpu | translation: Google")
+    print(f"Output: {output_dir}")
+    detector = make_detector()
     ocr = MangaOcrService(device="gpu")
     translator = get_translation_service()
     inpainter = MangaInpaintingService()
@@ -223,7 +210,7 @@ def main() -> int:
     for index, path in enumerate(images, 1):
         print(f"[{index}/{len(images)}] {path.name}", flush=True)
         try:
-            result = process_page(path, output_root, detector, ocr, translator,
+            result = process_page(path, output_dir, detector, ocr, translator,
                                   inpainter, typesetter, args)
             print(f"    box={result['detected']} rendered={result['translated']}", flush=True)
         except Exception as exc:
@@ -231,7 +218,7 @@ def main() -> int:
             print(f"    FAILED: {exc}", file=sys.stderr, flush=True)
         results.append(result)
     failures = sum(item["status"] != "ok" for item in results)
-    print(f"Complete: {len(images) - failures}/{len(images)} pages; output: {output_root}")
+    print(f"Complete: {len(images) - failures}/{len(images)} pages; output: {output_dir}")
     return 1 if failures else 0
 
 
