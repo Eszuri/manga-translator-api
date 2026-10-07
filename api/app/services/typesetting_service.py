@@ -1,6 +1,7 @@
 import os
 from typing import List, Tuple, Optional
-from PIL import Image, ImageDraw, ImageFont, ImageChops
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 from app.schemas import DetectedBubble
 
@@ -14,23 +15,15 @@ DEFAULT_FONT_PATH = os.path.join(
 
 
 class TypesettingError(RuntimeError):
-    """A dialogue cannot be rendered safely; never return an erased bubble."""
+    pass
 
 
 class MangaTypesettingService:
-    """
-    Typesetting service for manga dialogue translation.
-    Features:
-    - Dynamic font scaling with auto-fit binary search.
-    - Balanced, elliptical word-wrapping tailored for comic speech balloons.
-    - Centered multi-line alignment.
-    - Adaptive text stroke/outline for maximum legibility on any background.
-    """
 
     def __init__(
         self,
         font_path: Optional[str] = None,
-        padding_ratio: float = 0.22,
+        padding_ratio: float = 0.14,
         line_spacing_ratio: float = 0.20,
         all_caps: bool = True
     ):
@@ -41,7 +34,6 @@ class MangaTypesettingService:
         self._font_cache = {}
 
     def _get_font(self, size: int) -> ImageFont.FreeTypeFont:
-        """Retrieves or creates a cached TrueType font instance at the specified size."""
         if size in self._font_cache:
             return self._font_cache[size]
 
@@ -79,12 +71,8 @@ class MangaTypesettingService:
         font: ImageFont.ImageFont,
         max_width: int,
         draw: ImageDraw.ImageDraw,
-        break_long_words: bool = True
+        stroke_width: int = 0
     ) -> List[str]:
-        """
-        Wraps text into lines using pixel-accurate bounding box measurements.
-        Balances line lengths to avoid single-word dangling orphans.
-        """
         words = text.strip().split()
         if not words:
             return []
@@ -92,44 +80,19 @@ class MangaTypesettingService:
         lines: List[str] = []
         current_line: List[str] = []
 
-        def split_long_word(word: str) -> List[str]:
-            """Split an unspaced token into pixel-width-safe fragments."""
-            fragments: List[str] = []
-            fragment = ""
-            for character in word:
-                candidate = fragment + character
-                candidate_bbox = draw.textbbox((0, 0), candidate, font=font)
-                candidate_width = candidate_bbox[2] - candidate_bbox[0]
-                if fragment and candidate_width > max_width:
-                    fragments.append(fragment)
-                    fragment = character
-                else:
-                    fragment = candidate
-            if fragment:
-                fragments.append(fragment)
-            return fragments
-
         for word in words:
             test_line = " ".join(current_line + [word])
-            bbox = draw.textbbox((0, 0), test_line, font=font)
+            bbox = draw.textbbox((0, 0), test_line, font=font, stroke_width=stroke_width)
             line_w = bbox[2] - bbox[0]
 
             if line_w <= max_width:
                 current_line.append(word)
             elif not current_line:
-                fragments = split_long_word(word) if break_long_words else [word]
-                lines.extend(fragments[:-1])
-                current_line = fragments[-1:]
+                lines.append(word)
+                current_line = []
             else:
                 lines.append(" ".join(current_line))
-                word_bbox = draw.textbbox((0, 0), word, font=font)
-                word_width = word_bbox[2] - word_bbox[0]
-                if word_width > max_width:
-                    fragments = split_long_word(word) if break_long_words else [word]
-                    lines.extend(fragments[:-1])
-                    current_line = fragments[-1:]
-                else:
-                    current_line = [word]
+                current_line = [word]
 
         if current_line:
             lines.append(" ".join(current_line))
@@ -139,7 +102,9 @@ class MangaTypesettingService:
             if len(prev_words) >= 3:
                 moved_word = prev_words.pop()
                 candidate_last_line = f"{moved_word} {lines[-1]}"
-                candidate_bbox = draw.textbbox((0, 0), candidate_last_line, font=font)
+                candidate_bbox = draw.textbbox(
+                    (0, 0), candidate_last_line, font=font, stroke_width=stroke_width
+                )
                 candidate_width = candidate_bbox[2] - candidate_bbox[0]
                 if candidate_width <= max_width:
                     lines[-2] = " ".join(prev_words)
@@ -151,24 +116,22 @@ class MangaTypesettingService:
         self,
         lines: List[str],
         font: ImageFont.ImageFont,
-        draw: ImageDraw.ImageDraw
+        draw: ImageDraw.ImageDraw,
+        stroke_width: int = 0
     ) -> Tuple[int, int, List[int]]:
-        """
-        Calculates total width, total height, and individual line heights for a wrapped block.
-        """
         if not lines:
             return 0, 0, []
 
         line_heights = []
         max_w = 0
         for line in lines:
-            bbox = draw.textbbox((0, 0), line, font=font, stroke_width=max(1, int(font.size * 0.07)))
+            bbox = draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width)
             w = bbox[2] - bbox[0]
             h = bbox[3] - bbox[1]
             max_w = max(max_w, w)
             line_heights.append(max(h, font.size))
 
-        spacing = int(font.size * self.line_spacing_ratio)
+        spacing = max(2, int(round(font.size * self.line_spacing_ratio)))
         total_h = sum(line_heights) + max(0, len(lines) - 1) * spacing
         return max_w, total_h, line_heights
 
@@ -181,33 +144,47 @@ class MangaTypesettingService:
         page_scale: float = 1.0,
         font_scale: float = 1.0
     ) -> Tuple[ImageFont.ImageFont, List[str], List[int], int]:
-        """
-        Uses binary search to find the largest font size where the wrapped text
-        comfortably fits inside target dimensions.
-        """
-        page_cap = 28 * page_scale * font_scale
-        width_cap = max(12 * page_scale, target_w * 0.25) * font_scale
-        max_size = max(1, min(target_h, int(page_cap), int(width_cap)))
-        best_font, best_lines, best_line_heights, best_spacing = self._get_font(1), [], [], 0
-        low = 1
+        MIN_FONT_SIZE = 12
+        page_cap = max(MIN_FONT_SIZE, int(round(34 * page_scale * font_scale)))
+        width_cap = max(MIN_FONT_SIZE, int(round(max(14 * page_scale, target_w * 0.32) * font_scale)))
+        max_size = max(MIN_FONT_SIZE, min(target_h, page_cap, width_cap))
+
+        best_font = None
+        best_lines = []
+        best_line_heights = []
+        best_spacing = 0
+
+        low = MIN_FONT_SIZE
         high = max_size
 
         while low <= high:
             mid = (low + high) // 2
             test_font = self._get_font(mid)
-            stroke_width = max(1, int(test_font.size * 0.07))
-            lines = self._wrap_text(text, test_font, max(1, target_w - 2 * stroke_width), draw,
-                                    break_long_words=False)
-            w, h, line_heights = self._measure_text_block(lines, test_font, draw)
+            stroke_width = max(2, int(round(test_font.size * 0.08)))
+            lines = self._wrap_text(
+                text, test_font, target_w, draw, stroke_width=stroke_width
+            )
+            w, h, line_heights = self._measure_text_block(lines, test_font, draw, stroke_width=stroke_width)
 
             if w <= target_w and h <= target_h:
                 best_font = test_font
                 best_lines = lines
                 best_line_heights = line_heights
-                best_spacing = int(test_font.size * self.line_spacing_ratio)
+                best_spacing = max(2, int(round(test_font.size * self.line_spacing_ratio)))
                 low = mid + 1
             else:
                 high = mid - 1
+
+        if best_font is None:
+            best_font = self._get_font(MIN_FONT_SIZE)
+            stroke_width = max(2, int(round(best_font.size * 0.08)))
+            best_lines = self._wrap_text(
+                text, best_font, target_w, draw, stroke_width=stroke_width
+            )
+            _, _, best_line_heights = self._measure_text_block(
+                best_lines, best_font, draw, stroke_width=stroke_width
+            )
+            best_spacing = max(2, int(round(best_font.size * self.line_spacing_ratio)))
 
         return best_font, best_lines, best_line_heights, best_spacing
 
@@ -219,16 +196,15 @@ class MangaTypesettingService:
         text_color: Tuple[int, int, int] = (0, 0, 0),
         stroke_color: Tuple[int, int, int] = (255, 255, 255)
     ) -> Image.Image:
-        """
-        Renders translated dialogue text inside speech bubbles with comic typography.
-        """
-        if not bubbles:
+        if not bubbles or image.width == 0 or image.height == 0:
             return image
 
         output_img = image.copy()
-        draw = ImageDraw.Draw(output_img)
+        overlay = Image.new("RGBA", output_img.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
 
-        page_scale = min(image.width / 900.0, image.height / 1200.0)
+        page_scale = max(0.5, min(output_img.width / 900.0, output_img.height / 1200.0))
+        MIN_FONT_SIZE = 12
 
         for bubble in bubbles:
             text = bubble.translation or bubble.text
@@ -239,54 +215,75 @@ class MangaTypesettingService:
                 text = text.upper()
 
             bbox = bubble.layout_box or bubble.text_box or bubble.bounding_box
-            bw = bbox.width
-            bh = bbox.height
+            bw = max(1, bbox.width)
+            bh = max(1, bbox.height)
+            center_x = bbox.x + bw / 2.0
+            center_y = bbox.y + bh / 2.0
 
-            aspect = bh / max(1.0, float(bw))
-            pad_x_ratio = 0.06 if bubble.layout_box else (0.28 if aspect > 1.3 else self.padding_ratio)
-            pad_y_ratio = 0.06 if bubble.layout_box else self.padding_ratio
+            pad_ratio = 0.08 if bubble.layout_box else 0.12
+            init_target_w = max(20, int(bw * (1.0 - pad_ratio)))
+            init_target_h = max(20, int(bh * (1.0 - pad_ratio)))
 
-            margin_x = int(bw * (pad_x_ratio / 2.0))
-            margin_y = int(bh * (pad_y_ratio / 2.0))
-            content_left = max(0, bbox.x + margin_x)
-            content_top = max(0, bbox.y + margin_y)
-            content_right = min(output_img.width, bbox.right - margin_x)
-            content_bottom = min(output_img.height, bbox.bottom - margin_y)
-
-            if content_right <= content_left or content_bottom <= content_top:
-                continue
-
-            target_w = content_right - content_left
-            target_h = content_bottom - content_top
-
-            region_font_scale = font_scale * (0.65 if not bubble.bubble_polygon else 1.0)
             font, lines, line_heights, spacing = self.find_optimal_font_and_lines(
                 text=text,
-                target_w=target_w,
-                target_h=target_h,
+                target_w=init_target_w,
+                target_h=init_target_h,
                 draw=draw,
                 page_scale=page_scale,
-                font_scale=region_font_scale
+                font_scale=font_scale
             )
+
+            stroke_width = max(2, int(round(font.size * 0.08))) if stroke_color else 0
+            text_w, text_h, _ = self._measure_text_block(lines, font, draw, stroke_width=stroke_width)
+
+            if (text_w > init_target_w or text_h > init_target_h) and (init_target_w < bw or init_target_h < bh):
+                full_w = max(20, bw - 4)
+                full_h = max(20, bh - 4)
+                font_f, lines_f, heights_f, sp_f = self.find_optimal_font_and_lines(
+                    text=text,
+                    target_w=full_w,
+                    target_h=full_h,
+                    draw=draw,
+                    page_scale=page_scale,
+                    font_scale=font_scale
+                )
+                tw_f, th_f, _ = self._measure_text_block(lines_f, font_f, draw, stroke_width=stroke_width)
+                if tw_f <= full_w and th_f <= full_h:
+                    font, lines, line_heights, spacing = font_f, lines_f, heights_f, sp_f
+                    text_w, text_h = tw_f, th_f
+
+            if text_w > bw or text_h > bh:
+                font = self._get_font(MIN_FONT_SIZE)
+                stroke_width = max(2, int(round(font.size * 0.08))) if stroke_color else 0
+                expanded_wrap_w = max(
+                    bw, min(int(max(bw * 1.30, bh * 0.85, 110 * page_scale)), output_img.width - 24)
+                )
+                lines = self._wrap_text(
+                    text, font, expanded_wrap_w, draw, stroke_width=stroke_width
+                )
+                text_w, text_h, line_heights = self._measure_text_block(
+                    lines, font, draw, stroke_width=stroke_width
+                )
+                spacing = max(2, int(round(font.size * self.line_spacing_ratio)))
 
             if not lines:
                 continue
 
-            text_layer = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
-            text_draw = ImageDraw.Draw(text_layer)
+            box_x = int(round(center_x - text_w / 2.0))
+            box_y = int(round(center_y - text_h / 2.0))
 
-            total_h = sum(line_heights) + max(0, len(lines) - 1) * spacing
-            cur_y = (target_h - total_h) / 2.0
+            box_x = max(4, min(box_x, output_img.width - text_w - 4))
+            box_y = max(4, min(box_y, output_img.height - text_h - 4))
 
-            stroke_width = max(1, int(font.size * 0.07)) if stroke_color else 0
-
+            cur_y = box_y
             for i, line in enumerate(lines):
-                line_bbox = text_draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width)
+                line_bbox = draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width)
                 lw = line_bbox[2] - line_bbox[0]
-                line_x = (target_w - lw) / 2.0 - line_bbox[0]
+                line_x = box_x + (text_w - lw) / 2.0 - line_bbox[0]
+                line_y = cur_y - line_bbox[1]
 
-                text_draw.text(
-                    (line_x, cur_y - line_bbox[1]),
+                draw.text(
+                    (line_x, line_y),
                     line,
                     font=font,
                     fill=text_color,
@@ -295,13 +292,25 @@ class MangaTypesettingService:
                 )
                 cur_y += line_heights[i] + spacing
 
-            if bubble.bubble_polygon:
-                shape = Image.new('L', text_layer.size, 0)
-                ImageDraw.Draw(shape).polygon(
-                    [(x - content_left, y - content_top) for x, y in bubble.bubble_polygon], fill=255)
-                text_layer.putalpha(ImageChops.multiply(text_layer.getchannel('A'), shape))
-            if text_layer.getchannel('A').getbbox() is None:
-                continue
-            output_img.paste(text_layer, (content_left, content_top), text_layer)
+        ov_arr = np.array(overlay)
+        has_alpha = ov_arr[:, :, 3] > 0
+        if np.any(has_alpha):
+            bg_arr = np.array(output_img)
+            if text_color == (0, 0, 0) and stroke_color == (255, 255, 255):
+                is_text = (ov_arr[:, :, 0] < 100) & has_alpha
+                is_stroke = (ov_arr[:, :, 0] >= 100) & has_alpha
+                dest_gray = (
+                    0.299 * bg_arr[:, :, 0] + 0.587 * bg_arr[:, :, 1] + 0.114 * bg_arr[:, :, 2]
+                )
+                is_dark_line = dest_gray < 75
+                apply_stroke = is_stroke & (~is_dark_line)
+
+                for c in range(3):
+                    bg_arr[:, :, c] = np.where(apply_stroke, ov_arr[:, :, c], bg_arr[:, :, c])
+                    bg_arr[:, :, c] = np.where(is_text, ov_arr[:, :, c], bg_arr[:, :, c])
+
+                output_img = Image.fromarray(bg_arr)
+            else:
+                output_img.paste(overlay, (0, 0), overlay)
 
         return output_img
