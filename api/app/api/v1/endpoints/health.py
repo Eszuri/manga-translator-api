@@ -21,10 +21,6 @@ class HealthResponse(BaseModel):
 
 @router.get("/health", response_model=HealthResponse)
 def get_health():
-    """
-    Health check endpoint to verify API server is operational
-    and retrieve supported translation languages.
-    """
     return HealthResponse(
         status="healthy",
         project_name=settings.PROJECT_NAME,

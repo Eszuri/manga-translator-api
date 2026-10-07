@@ -16,7 +16,7 @@ def get_hybrid_detector():
     global _hybrid_detector
     if _hybrid_detector is None:
         from app.services.hybrid_detector import HybridBubbleDetector
-        _hybrid_detector = HybridBubbleDetector(device="gpu")
+        _hybrid_detector = HybridBubbleDetector()
     return _hybrid_detector
 
 

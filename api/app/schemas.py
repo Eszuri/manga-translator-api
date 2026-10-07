@@ -56,10 +56,6 @@ class DetectedBubble(BaseModel):
         description="Estimated text reading orientation ('vertical' for Manga, 'horizontal' for Manhwa)"
     )
     aspect_ratio: float = Field(..., description="Height-to-width ratio (height / width)")
-    detector_type: Optional[str] = Field(
-        default="hybrid", 
-        description="Detector engine used ('hybrid', 'comic_text_detector', 'contour')"
-    )
 
 
 class DetectBubblesResponse(BaseModel):

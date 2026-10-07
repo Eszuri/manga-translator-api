@@ -1,4 +1,3 @@
-"""Text-seeded balloon geometry shared by detection, erasure and layout."""
 from typing import List, Optional, Tuple
 
 import cv2
@@ -22,7 +21,6 @@ def union_boxes(boxes: List[BoundingBox]) -> BoundingBox:
 
 
 def adjacent_columns(a: BoundingBox, b: BoundingBox) -> bool:
-    """Only join overlapping/adjacent columns, not separate lobes or speakers."""
     overlap_y = max(0, min(a.bottom, b.bottom) - max(a.y, b.y))
     overlap_x = max(0, min(a.right, b.right) - max(a.x, b.x))
     if overlap_x * overlap_y > 0.55 * min(a.area, b.area):
@@ -35,7 +33,6 @@ def adjacent_columns(a: BoundingBox, b: BoundingBox) -> bool:
 
 def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndarray,
                       direction: str) -> List[BoundingBox]:
-    """Recover glyph envelopes and split staggered dialogue groups in one AI box."""
     original = text
     pad = max(4, min(12, round(min(text.width, text.height) * 0.15)))
     x, y = max(0, text.x - pad), max(0, text.y - pad)
@@ -172,7 +169,6 @@ def interior_polygon(mask: np.ndarray, origin: Tuple[int, int]) -> List[Tuple[in
 
 
 def safe_layout_box(mask: np.ndarray, origin: Tuple[int, int], text: BoundingBox) -> Optional[BoundingBox]:
-    """Largest inscribed rectangle near the text anchor, excluding tails/concavities."""
     h, w = mask.shape
     inset = max(2, round(min(w, h) * 0.035))
     safe = cv2.erode(mask.astype(np.uint8), np.ones((2 * inset + 1, 2 * inset + 1), np.uint8),
@@ -213,7 +209,6 @@ def safe_layout_box(mask: np.ndarray, origin: Tuple[int, int], text: BoundingBox
 
 
 class BalloonRegions:
-    """Close small outline gaps at several scales, then match regions by text support."""
 
     def __init__(self, gray: np.ndarray, white_threshold: int = 195,
                  text_boxes: Optional[List[BoundingBox]] = None):

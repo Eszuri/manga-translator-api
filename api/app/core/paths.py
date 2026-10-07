@@ -1,4 +1,3 @@
-"""Resolve model files independently of the source checkout or frozen bundle."""
 import os
 from pathlib import Path
 

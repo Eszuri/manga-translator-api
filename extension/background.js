@@ -1,9 +1,7 @@
 const DEFAULT_SETTINGS = {
   apiUrl: 'http://127.0.0.1:8000',
   targetLang: 'id',
-  detectorType: 'hybrid',
   readingDirection: 'rtl',
-  device: 'gpu',
   translationMode: 'inpaint',
   fontScale: 1.0,
   allCaps: true,
@@ -287,14 +285,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.sync.get({ detectorType: 'hybrid' }, (settings) => {
-    chrome.storage.sync.set({
-      device: 'gpu',
-      detectorType: settings.detectorType === 'comic_text_detector'
-        ? 'comic_text_detector'
-        : 'hybrid'
-    });
-  });
   chrome.contextMenus.create({
     id: "translateMangaPage",
     title: "Translate this Manga Page",

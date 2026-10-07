@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class TranslationError(RuntimeError):
-    """A translation failure that must not be rendered over source dialogue."""
+    pass
 
 
 def validate_translations(
@@ -35,10 +35,6 @@ def validate_translations(
 
 
 def extract_json_from_text(text: str) -> Optional[dict]:
-    """
-    Safely extracts and parses a JSON object from LLM response text,
-    stripping markdown code fences (```json ... ```) or surrounding text.
-    """
     text = text.strip()
     if not text:
         return None
@@ -67,10 +63,6 @@ def extract_json_from_text(text: str) -> Optional[dict]:
 
 
 class MangaTranslationService:
-    """
-    Universal OpenAI-compatible contextual translation service for manga dialogues.
-    Works with official OpenAI, OpenRouter, Groq, DeepSeek, local Ollama, vLLM, etc.
-    """
     _shared_instance: Optional["MangaTranslationService"] = None
 
     def __init__(
@@ -86,7 +78,6 @@ class MangaTranslationService:
         self.timeout_seconds = timeout_seconds or settings.LLM_TIMEOUT_SECONDS
 
     def is_configured(self) -> bool:
-        """Returns True if a real API key is configured (or if using a local provider like Ollama)."""
         if not self.api_key or self.api_key.lower() in ("your_api_key_here", "none", ""):
             return urlsplit(self.base_url).hostname in (
                 "localhost", "127.0.0.1", "::1"
@@ -135,12 +126,6 @@ class MangaTranslationService:
         dialogue_items: List[Dict[str, Any]],
         target_lang: str = "id"
     ) -> Dict[int, str]:
-        """Translate dialogue items with Google's Chrome translation endpoint.
-
-        Requests are batched to avoid sending one HTTP request per speech bubble.
-        Translation failures are raised so the pipeline cannot silently inpaint the
-        source text and render the untranslated Japanese text again.
-        """
         results: Dict[int, str] = {}
         target_code = "id" if target_lang.lower() in ("id", "indonesian") else "en"
 
@@ -281,7 +266,6 @@ class MangaTranslationService:
         dialogue_items: List[Dict[str, Any]],
         target_lang: str = "id"
     ) -> Dict[int, str]:
-        """Asynchronous HTTP call to the OpenAI-compatible endpoint."""
         if not self.model.strip():
             raise TranslationError("LLM model ID is empty. Set LLM_MODEL in api/.env.")
         if not self.is_configured():
@@ -327,7 +311,6 @@ class MangaTranslationService:
         raw_content: str,
         dialogue_items: List[Dict[str, Any]]
     ) -> Dict[int, str]:
-        """Require complete LLM output before any original text is erased."""
         parsed = extract_json_from_text(raw_content)
         result: Dict[int, str] = {}
 
@@ -352,7 +335,6 @@ def get_translation_service(
     base_url: Optional[str] = None,
     model: Optional[str] = None
 ) -> MangaTranslationService:
-    """Returns singleton instance of MangaTranslationService."""
     if (
         MangaTranslationService._shared_instance is not None
         and api_key is None

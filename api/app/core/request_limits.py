@@ -1,5 +1,3 @@
-"""Bound image requests before upload parsing and decoding allocate memory."""
-
 from contextvars import ContextVar
 from threading import Lock
 
@@ -8,7 +6,6 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 class ImageRequestLease:
-    """Keep admission occupied until the response and any native work finish."""
 
     def __init__(self, release):
         self._release = release

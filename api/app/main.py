@@ -18,14 +18,13 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Fail startup unless both inference models create strict GPU sessions."""
     startup_started = perf_counter()
     from app.services.comic_text_detector import ComicTextDetector
     from app.services.ocr_service import get_ocr_service
 
     app.state.gpu_provider = required_gpu_provider()
-    app.state.detector = ComicTextDetector(device="gpu")
-    app.state.ocr = get_ocr_service(device="gpu")
+    app.state.detector = ComicTextDetector()
+    app.state.ocr = get_ocr_service()
     logger.info(
         "[startup:ready] GPU models ready in %.1fs; starting HTTP server",
         perf_counter() - startup_started,
@@ -61,7 +60,6 @@ app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
 @app.exception_handler(RequestValidationError)
 async def request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
-    """Log rejected form fields without logging uploaded image data."""
     errors = [
         {key: value for key, value in error.items() if key in ("type", "loc", "msg")}
         for error in exc.errors()

@@ -132,8 +132,6 @@ document.addEventListener('DOMContentLoaded', () => {
       targetLang: 'id',
       readingDirection: 'rtl',
       translationMode: 'inpaint',
-      detectorType: 'hybrid',
-      device: 'gpu',
       fontScale: 1.0,
       allCaps: true,
       autoTranslate: true,

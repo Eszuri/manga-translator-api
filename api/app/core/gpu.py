@@ -1,4 +1,3 @@
-"""Strict GPU execution policy for ONNX Runtime model inference."""
 import os
 from typing import List
 
@@ -9,7 +8,6 @@ GPU_PROVIDERS = ("CUDAExecutionProvider", "DmlExecutionProvider")
 
 
 def required_gpu_provider() -> str:
-    """Return the configured GPU provider or the best available provider."""
     configured = os.getenv("GPU_PROVIDER", "").strip()
     available = ort.get_available_providers()
 
@@ -36,12 +34,6 @@ def required_gpu_provider() -> str:
 
 
 def configure_gpu_session(options: ort.SessionOptions) -> List[str]:
-    """Configure an ONNX session with a required GPU execution provider.
-
-    ONNX Runtime keeps a small number of shape/control nodes on its CPU provider
-    by design. Runtime provider failure is still disabled after session creation,
-    so CUDA/DirectML compute cannot silently fall back to CPU inference.
-    """
     provider = required_gpu_provider()
 
     if provider == "CUDAExecutionProvider" and hasattr(ort, "preload_dlls"):
@@ -54,7 +46,6 @@ def configure_gpu_session(options: ort.SessionOptions) -> List[str]:
 
 
 def verify_gpu_session(session: ort.InferenceSession, component: str) -> str:
-    """Disable runtime fallback and verify that the requested GPU EP is active."""
     provider = required_gpu_provider()
     active = session.get_providers()
     if provider not in active:
@@ -63,9 +54,3 @@ def verify_gpu_session(session: ort.InferenceSession, component: str) -> str:
         )
     session.disable_fallback()
     return provider
-
-
-def require_gpu_device(device: str) -> None:
-    """Reject legacy CPU/auto request values before any processing begins."""
-    if device.lower() != "gpu":
-        raise ValueError("This backend is GPU-only; the device parameter must be 'gpu'.")

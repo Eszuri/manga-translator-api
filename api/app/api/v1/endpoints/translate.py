@@ -33,9 +33,7 @@ def get_hybrid_detector():
     global _hybrid_detector
     if _hybrid_detector is None:
         from app.services.hybrid_detector import HybridBubbleDetector
-        from app.services.comic_text_detector import ComicTextDetector
-        comic_det = ComicTextDetector(device="gpu")
-        _hybrid_detector = HybridBubbleDetector(comic_detector=comic_det)
+        _hybrid_detector = HybridBubbleDetector()
     return _hybrid_detector
 
 
@@ -53,7 +51,7 @@ def detect_page(image, reading_direction, include_seg=False):
 
 
 def recognize_bubbles(image, bubbles):
-    return get_ocr_service(device="gpu").recognize_all_bubbles(image, bubbles)
+    return get_ocr_service().recognize_all_bubbles(image, bubbles)
 
 
 def encode_image(image):

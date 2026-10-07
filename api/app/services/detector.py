@@ -10,11 +10,6 @@ def sort_manga_reading_order(
     reading_direction: str = "rtl",
     row_tolerance_ratio: float = 0.35
 ) -> List[DetectedBubble]:
-    """
-    Sorts detected speech bubbles in authentic comic reading order:
-    - RTL (Manga): Top-to-Bottom by panel row band, then Right-to-Left within each row.
-    - LTR (Manhwa / Western): Top-to-Bottom by row, then Left-to-Right.
-    """
     if not bubbles:
         return []
 
@@ -42,7 +37,7 @@ def sort_manga_reading_order(
 class BaseBubbleDetector(ABC):
     @abstractmethod
     def detect(self, image: Image.Image) -> List[DetectedBubble]:
-        """Detect speech bubbles from a PIL Image."""
+        pass
 
 
 def annotate_and_save_bubbles(
@@ -52,11 +47,6 @@ def annotate_and_save_bubbles(
     draw_text_boxes: bool = True,
     draw_layout: bool = False
 ) -> str:
-    """
-    Renders bounding box annotations onto a copy of the manga image
-    and saves exactly one output file at the specified output_path.
-    Draws outer bubble in red and inner text box in green (if present and distinct).
-    """
     out = image.copy()
     draw = ImageDraw.Draw(out)
     for b in bubbles:

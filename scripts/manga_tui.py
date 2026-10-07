@@ -1,7 +1,3 @@
-"""Manga Translator Control Center & Unified Runner
-Menggabungkan seluruh runner (Server API, Build Gambar, Build Extension)
-dalam satu skrip Python native dan menyediakan antarmuka TUI interaktif.
-"""
 
 from __future__ import annotations
 
@@ -87,7 +83,6 @@ _CTRL_HANDLER_REF = None
 
 
 def cleanup_pid(pid: int) -> None:
-    """Menghentikan proses anak beserta seluruh pohon prosesnya (tree-kill)."""
     try:
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=5)
     except Exception:
@@ -95,7 +90,6 @@ def cleanup_pid(pid: int) -> None:
 
 
 def _close_proc_transport(proc: asyncio.subprocess.Process | None) -> None:
-    """Tutup transport & pipe asyncio proses dengan aman."""
     if proc is None:
         return
     transport = getattr(proc, "_transport", None)
@@ -107,7 +101,6 @@ def _close_proc_transport(proc: asyncio.subprocess.Process | None) -> None:
 
 
 def cleanup_all_processes(wait_extension: bool = True) -> None:
-    """Tutup server/worker dan selesaikan build extension sebelum exit."""
     global EXTENSION_BUILD_RUNNING
     if wait_extension and EXTENSION_BUILD_RUNNING:
         try:
@@ -122,13 +115,11 @@ def cleanup_all_processes(wait_extension: bool = True) -> None:
 
 
 def win32_ctrl_handler(_ctrl_type: int) -> bool:
-    """Menangani event close terminal / shutdown dari OS Windows."""
     cleanup_all_processes(wait_extension=True)
     return False
 
 
 def setup_process_lifecycle() -> None:
-    """Mendaftarkan handler lifecycle proses untuk exit yang bersih."""
     global _CTRL_HANDLER_REF
     atexit.register(cleanup_all_processes)
 
@@ -154,7 +145,6 @@ def setup_process_lifecycle() -> None:
 
 
 def get_server_port() -> str:
-    """Membaca port API dari api/.env."""
     if ENV_FILE.exists():
         try:
             with open(ENV_FILE, "r", encoding="utf-8") as f:
@@ -167,7 +157,6 @@ def get_server_port() -> str:
 
 
 def get_network_access_urls(port: str) -> dict[str, list[str]]:
-    """Mendeteksi URL akses Localhost, LAN, dan Tailscale untuk multi-device."""
     urls: dict[str, list[str]] = {
         "local": [f"http://127.0.0.1:{port}"],
         "lan": [],
@@ -194,7 +183,6 @@ def get_network_access_urls(port: str) -> dict[str, list[str]]:
 
 
 def find_chromium_browser() -> str | None:
-    """Mencari binary browser Chromium untuk build CRX."""
     candidates = [
         os.environ.get("CHROME_PATH"),
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -215,7 +203,6 @@ def find_chromium_browser() -> str | None:
 
 
 def build_extension_package_sync(log_func=None) -> bool:
-    """Memaketkan folder extension/ menjadi .zip dan .crx secara native."""
     global EXTENSION_BUILD_RUNNING
     EXTENSION_BUILD_DONE.clear()
     EXTENSION_BUILD_RUNNING = True
@@ -295,7 +282,6 @@ def build_extension_package_sync(log_func=None) -> bool:
 
 
 class MangaTranslatorTUI(App):
-    """TUI minimalis untuk Manga Translator."""
 
     TITLE = "Manga Translator"
 
@@ -617,7 +603,6 @@ class MangaTranslatorTUI(App):
         self.query_one("#terminal-log", RichLog).clear()
 
     def action_quit(self) -> None:
-        """Tutup atau selesaikan proses aktif sebelum keluar."""
         _close_proc_transport(self.worker_proc)
         _close_proc_transport(self.server_proc)
         if self.worker_proc and self.worker_proc.returncode is None:
@@ -638,7 +623,6 @@ class MangaTranslatorTUI(App):
 
 
 def run_cli_server():
-    """Menjalankan server langsung dari terminal."""
     print("Menjalankan API Server lokal...")
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -657,7 +641,6 @@ def run_cli_server():
 
 
 def run_cli_images():
-    """Menjalankan build gambar langsung dari terminal."""
     if not IMAGES_ORIGINAL.exists():
         print(f"[FAILED] Folder gambar tidak ditemukan: {IMAGES_ORIGINAL}")
         sys.exit(1)

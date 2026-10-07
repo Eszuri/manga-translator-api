@@ -7,11 +7,6 @@ from app.schemas import DetectedBubble
 
 
 class MangaInpaintingService:
-    """
-    Service for erasing original Japanese text from manga speech bubbles and panels.
-    Combines deep-learning character segmentation masks with morphological dilation
-    and fast OpenCV Telea inpainting.
-    """
 
     def __init__(
         self,
@@ -34,9 +29,6 @@ class MangaInpaintingService:
         bubbles: Optional[List[DetectedBubble]] = None,
         source_image: Optional[np.ndarray] = None
     ) -> np.ndarray:
-        """
-        Builds a binary inpainting mask (255 where text is present, 0 elsewhere).
-        """
         orig_h, orig_w = image_shape[:2]
         final_mask = np.zeros((orig_h, orig_w), dtype=np.uint8)
 
@@ -122,10 +114,6 @@ class MangaInpaintingService:
         seg_mask: Optional[np.ndarray] = None,
         bubbles: Optional[List[DetectedBubble]] = None,
     ) -> Image.Image:
-        """
-        Inpaints the input PIL Image to erase Japanese dialogue text.
-        Returns a new PIL Image with clean bubbles.
-        """
         if image.width == 0 or image.height == 0:
             return image
 

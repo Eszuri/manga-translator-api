@@ -18,20 +18,18 @@ def get_hybrid_detector():
     global _hybrid_detector
     if _hybrid_detector is None:
         from app.services.hybrid_detector import HybridBubbleDetector
-        from app.services.comic_text_detector import ComicTextDetector
-        comic_det = ComicTextDetector(device="gpu")
-        _hybrid_detector = HybridBubbleDetector(comic_detector=comic_det)
+        _hybrid_detector = HybridBubbleDetector()
     return _hybrid_detector
 
 
 def recognize_page(image, reading_direction):
     detector = get_hybrid_detector()
     bubbles = sort_manga_reading_order(detector.detect(image), reading_direction=reading_direction)
-    return get_ocr_service(device="gpu").recognize_all_bubbles(image, bubbles)
+    return get_ocr_service().recognize_all_bubbles(image, bubbles)
 
 
 def recognize_crop(image):
-    return get_ocr_service(device="gpu").recognize_crop(image)
+    return get_ocr_service().recognize_crop(image)
 
 
 class CropOCRResponse(BaseModel):

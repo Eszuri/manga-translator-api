@@ -13,15 +13,13 @@ from app.services.balloon_geometry import (
 
 
 class HybridBubbleDetector(BaseBubbleDetector):
-    """Match neural text groups to balloon interiors and keep separate layout geometry."""
 
     def __init__(self, comic_detector: Optional[ComicTextDetector] = None,
                  conf_threshold: float = 0.35, nms_threshold: float = 0.35,
-                 white_threshold: int = 195, num_threads: int = 4,
-                 device: str = 'gpu'):
+                 white_threshold: int = 195, num_threads: int = 4):
         self.comic_detector = comic_detector or ComicTextDetector(
             conf_threshold=conf_threshold, nms_threshold=nms_threshold,
-            num_threads=num_threads, device=device)
+            num_threads=num_threads)
         self.white_threshold = white_threshold
 
     def detect(self, image: Image.Image) -> List[DetectedBubble]:
@@ -112,5 +110,5 @@ class HybridBubbleDetector(BaseBubbleDetector):
                 layout_box=layout, bubble_polygon=polygon or None,
                 confidence=round(sum(b.confidence for b in members) / len(members), 2),
                 direction=members[0].direction,
-                aspect_ratio=round(balloon.height / balloon.width, 2), detector_type='hybrid'))
+                aspect_ratio=round(balloon.height / balloon.width, 2)))
         return sort_manga_reading_order(results, reading_direction='rtl')

@@ -31,12 +31,10 @@ def llm_base_url() -> str:
 
 
 def parse_origins(value: Optional[str]) -> List[str]:
-    """Parse comma-separated CORS origins while discarding empty entries."""
     return [origin.strip() for origin in (value or "").split(",") if origin.strip()]
 
 
 def validate_cors_configuration(origins: List[str], allow_credentials: bool) -> None:
-    """Reject the insecure wildcard-and-credentials CORS combination."""
     if allow_credentials and "*" in origins:
         raise ValueError("ALLOWED_ORIGINS cannot contain '*' when CORS_ALLOW_CREDENTIALS is enabled.")
 

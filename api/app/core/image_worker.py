@@ -1,5 +1,3 @@
-"""Serialize synchronous image/GPU work without blocking the HTTP event loop."""
-
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -39,7 +37,6 @@ async def _run_native_task(executor, function, *args, **kwargs):
 
 
 async def stream_with_heartbeats(events, interval=10.0):
-    """Keep clients informed while a stage runs or waits for the GPU worker."""
     pending = None
     try:
         while True:

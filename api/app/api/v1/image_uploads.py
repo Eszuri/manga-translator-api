@@ -1,5 +1,3 @@
-"""Shared validation for image uploads accepted by API endpoints."""
-
 from io import BytesIO
 import warnings
 
@@ -20,7 +18,6 @@ ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP"}
 
 
 async def read_validated_image(file: UploadFile) -> Image.Image:
-    """Read, verify, and decode a supported image within configured limits."""
     if file.content_type and file.content_type.lower() not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,

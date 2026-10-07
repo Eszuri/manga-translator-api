@@ -12,7 +12,7 @@ from transformers.models.vit.image_processing_pil_vit import ViTImageProcessorPi
 from transformers.models.bert_japanese.tokenization_bert_japanese import BertJapaneseTokenizer
 
 from app.schemas import DetectedBubble
-from app.core.gpu import configure_gpu_session, require_gpu_device, verify_gpu_session
+from app.core.gpu import configure_gpu_session, verify_gpu_session
 from app.core.paths import MODEL_DIR
 
 logger = logging.getLogger(__name__)
@@ -21,28 +21,19 @@ DEFAULT_OCR_DIR = str(MODEL_DIR / "manga-ocr")
 
 
 class MangaOcrService:
-    """
-    Japanese Manga OCR Engine based on Vision Transformer (ViT + RoBERTa) in ONNX format.
-    Optimized for high-accuracy recognition of vertical/horizontal text, kanji, and furigana.
-    Requires NVIDIA CUDA or DirectML GPU execution; CPU inference is disabled.
-    """
     _shared_instance: Optional["MangaOcrService"] = None
 
     def __init__(
         self,
         model_dir: Optional[str] = None,
-        device: str = "gpu",
         num_threads: int = 4
     ):
         self.model_dir = model_dir or DEFAULT_OCR_DIR
         self.num_threads = num_threads
 
-        require_gpu_device(device)
-
         self._init_models()
 
     def _init_models(self):
-        """Initializes tokenizer, processor, and ONNX Runtime sessions."""
         encoder_path = os.path.join(self.model_dir, "encoder_model.onnx")
         decoder_path = os.path.join(self.model_dir, "decoder_model.onnx")
 
@@ -110,9 +101,6 @@ class MangaOcrService:
         raise RuntimeError(f"Manga OCR has no active GPU provider: {active}")
 
     def recognize_crop(self, image: Image.Image, max_length: int = 300) -> str:
-        """
-        Runs ViT encoder and autoregressive greedy decoder to extract Japanese text from a crop.
-        """
         img_rgb = image.convert("L").convert("RGB")
         pixel_values = self.processor(img_rgb, return_tensors="np").pixel_values
 
@@ -147,9 +135,6 @@ class MangaOcrService:
         bubble: DetectedBubble,
         padding: int = 6
     ) -> str:
-        """
-        Crops text area with safety padding from full image and performs OCR.
-        """
         target = bubble.text_box if bubble.text_box is not None else bubble.bounding_box
         w, h = full_image.size
 
@@ -175,21 +160,15 @@ class MangaOcrService:
         bubbles: List[DetectedBubble],
         padding: int = 6
     ) -> List[DetectedBubble]:
-        """
-        Extracts OCR text for all bubbles in the list.
-        Populates bubble.text for each DetectedBubble.
-        """
         for bubble in bubbles:
             bubble.text = self.recognize_bubble(full_image, bubble, padding=padding)
         return bubbles
 
 
-def get_ocr_service(device: str = "gpu") -> MangaOcrService:
-    """Returns singleton instance of MangaOcrService."""
-    require_gpu_device(device)
+def get_ocr_service() -> MangaOcrService:
     if MangaOcrService._shared_instance is not None:
         return MangaOcrService._shared_instance
 
-    instance = MangaOcrService(device=device)
+    instance = MangaOcrService()
     MangaOcrService._shared_instance = instance
     return instance

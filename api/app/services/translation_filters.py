@@ -1,4 +1,3 @@
-"""Filters for standalone graphic labels and untranslated OCR output."""
 import re
 import unicodedata
 

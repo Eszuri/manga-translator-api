@@ -8,7 +8,7 @@ import cv2
 import onnxruntime as ort
 
 from app.schemas import BoundingBox, DetectedBubble
-from app.core.gpu import configure_gpu_session, require_gpu_device, verify_gpu_session
+from app.core.gpu import configure_gpu_session, verify_gpu_session
 from app.core.paths import MODEL_DIR
 from app.services.detector import BaseBubbleDetector, sort_manga_reading_order
 from app.services.balloon_geometry import refine_text_boxes
@@ -23,11 +23,6 @@ def letterbox(
     new_shape: Tuple[int, int] = (1024, 1024),
     color: Tuple[int, int, int] = (114, 114, 114)
 ) -> Tuple[np.ndarray, float, Tuple[float, float]]:
-    """
-    Resizes image to a 32-pixel multiple while preserving original aspect ratio
-    using neutral gray padding (YOLO/Vision standard).
-    Returns: (letterboxed_image, scale_ratio, (dw, dh))
-    """
     shape = img.shape[:2]
     r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
     new_unpad = (int(round(shape[1] * r)), int(round(shape[0] * r)))
@@ -43,10 +38,6 @@ def letterbox(
 
 
 class ComicTextDetector(BaseBubbleDetector):
-    """
-    Deep-learning text detector specifically trained on manga and comics (dmMaze / mayocream architecture).
-    Detects text regions, orientation (vertical/horizontal), and character segmentation masks.
-    """
     _shared_session: Optional[ort.InferenceSession] = None
     _shared_model_path: Optional[str] = None
 
@@ -55,15 +46,12 @@ class ComicTextDetector(BaseBubbleDetector):
         model_path: Optional[str] = None,
         conf_threshold: float = 0.35,
         nms_threshold: float = 0.35,
-        num_threads: int = 4,
-        device: str = "gpu"
+        num_threads: int = 4
     ):
         self.model_path = model_path or DEFAULT_MODEL_PATH
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.num_threads = num_threads
-        
-        require_gpu_device(device)
 
         started = perf_counter()
         logger.info(
@@ -81,7 +69,6 @@ class ComicTextDetector(BaseBubbleDetector):
         )
 
     def _init_session(self):
-        """Initializes or reuses the ONNX inference session."""
         if (
             ComicTextDetector._shared_session is not None
             and ComicTextDetector._shared_model_path == self.model_path
@@ -128,10 +115,6 @@ class ComicTextDetector(BaseBubbleDetector):
         raise RuntimeError(f"Comic text detector has no active GPU provider: {active}")
 
     def detect_raw(self, image: Image.Image) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float, Tuple[float, float]]:
-        """
-        Runs model inference with letterbox preprocessing.
-        Returns: (blk, seg, det, ratio, (dw, dh))
-        """
         img_rgb = np.array(image.convert("RGB"))
         lb_img, r, (dw, dh) = letterbox(img_rgb, new_shape=(1024, 1024))
         inp = (lb_img.astype(np.float32) / 255.0).transpose(2, 0, 1)[None, ...]
@@ -147,9 +130,6 @@ class ComicTextDetector(BaseBubbleDetector):
         dw: float,
         dh: float
     ) -> np.ndarray:
-        """
-        Unletterboxes segmentation mask [1, 1, 1024, 1024] to original image resolution (orig_h, orig_w).
-        """
         mask_h, mask_w = seg.shape[-2:]
         top = int(round(dh - 0.1))
         bottom = mask_h - int(round(dh + 0.1))
@@ -160,10 +140,6 @@ class ComicTextDetector(BaseBubbleDetector):
         return resized
 
     def detect(self, image: Image.Image, refine: bool = True) -> List[DetectedBubble]:
-        """
-        Detects manga text blocks using the Comic Text Detector neural network with Letterbox.
-        Returns a list of DetectedBubble objects with text_box populated.
-        """
         orig_w, orig_h = image.size
         if orig_w == 0 or orig_h == 0:
             return []
@@ -242,8 +218,7 @@ class ComicTextDetector(BaseBubbleDetector):
                 text_box=bbox,
                 confidence=round(conf, 2),
                 direction=direction,
-                aspect_ratio=aspect_ratio,
-                detector_type="comic_text_detector"
+                aspect_ratio=aspect_ratio
             )
             detected_list.append(bubble)
 
