@@ -181,10 +181,13 @@ async def inpaint_and_translate_manga_page(
             )
             active_bubbles = [b for b in candidates if usable_translation(b.translation or "")]
 
-    inpaint_service = MangaInpaintingService()
-    inpainted_img = await run_image_task(
-        inpaint_service.inpaint, image, seg_mask=seg_mask, bubbles=active_bubbles or ordered_bubbles
-    )
+    bubbles_to_inpaint = active_bubbles if typeset else ordered_bubbles
+    inpainted_img = image
+    if bubbles_to_inpaint:
+        inpaint_service = MangaInpaintingService()
+        inpainted_img = await run_image_task(
+            inpaint_service.inpaint, image, seg_mask=seg_mask, bubbles=bubbles_to_inpaint
+        )
 
     if typeset and active_bubbles:
         typeset_service = MangaTypesettingService(all_caps=all_caps)
@@ -305,10 +308,13 @@ async def inpaint_stream_manga_page(
             yield json.dumps({"stage": "inpaint", "message": "Removing original text (inpainting)..."}) + "\n"
             await asyncio.sleep(0.01)
 
-            inpaint_service = MangaInpaintingService()
-            inpainted_img = await run_image_task(
-                inpaint_service.inpaint, image, seg_mask=seg_mask, bubbles=active_bubbles or ordered_bubbles
-            )
+            bubbles_to_inpaint = active_bubbles if typeset else ordered_bubbles
+            inpainted_img = image
+            if bubbles_to_inpaint:
+                inpaint_service = MangaInpaintingService()
+                inpainted_img = await run_image_task(
+                    inpaint_service.inpaint, image, seg_mask=seg_mask, bubbles=bubbles_to_inpaint
+                )
 
             yield json.dumps({"stage": "render", "message": "Rendering and typesetting text..."}) + "\n"
             await asyncio.sleep(0.01)

@@ -346,12 +346,14 @@ class MangaTranslator {
   }
 
   getCanonicalSource(img) {
-    if (img.dataset.mtOriginalSrc) return img.dataset.mtOriginalSrc;
+    this.refreshImageSource(img);
     const state = this.responsiveImageStates.get(img);
-    if (state?.originalSrc) return state.originalSrc;
+    if (this.hasTranslatedImageSource(img, state)) return state.originalSrc;
 
     const lazySrc = img.dataset.src || img.dataset.lazySrc || img.dataset.original || img.dataset.url || img.dataset.highres;
-    const current = img.currentSrc || img.src || '';
+    const responsive = this.hasResponsiveImageSource(img);
+    if (responsive && !img.complete) return '';
+    const current = (responsive ? img.currentSrc || img.src : img.src || img.currentSrc) || '';
 
     if (lazySrc && (!current || current.startsWith('data:') || current.startsWith('blob:') || current.includes('placeholder') || current.includes('blank'))) {
       try {
@@ -384,8 +386,69 @@ class MangaTranslator {
     return this.getCanonicalSource(img);
   }
 
+  getPictureSources(img) {
+    return img.parentElement?.tagName === 'PICTURE'
+      ? Array.from(img.parentElement.querySelectorAll('source')) : [];
+  }
+
+  hasResponsiveImageSource(img) {
+    return Boolean(img.getAttribute('srcset') ||
+      this.getPictureSources(img).some(source => source.getAttribute('srcset')));
+  }
+
+  hasSamePictureSources(img, sources) {
+    const current = this.getPictureSources(img);
+    return current.length === sources.length && current.every((source, index) => source === sources[index]);
+  }
+
   hasTranslatedImageSource(img, state = this.responsiveImageStates.get(img)) {
-    return Boolean(state?.appliedSrc && (img.src === state.appliedSrc || img.getAttribute('src') === state.appliedSrc));
+    return Boolean(state?.appliedSrc &&
+      (img.src === state.appliedSrc || img.getAttribute('src') === state.appliedSrc) &&
+      this.hasSamePictureSources(img, state.sources.map(({ source }) => source)) &&
+      state.appliedSignature === this.getImageSourceSignature(img, false));
+  }
+
+  refreshImageSource(img) {
+    const state = this.responsiveImageStates.get(img);
+    if (!state || this.hasTranslatedImageSource(img, state)) return;
+    if (!state.appliedSrc && state.sourceSignature === this.getImageSourceSignature(img, false) &&
+        this.hasSamePictureSources(img, state.sources.map(({ source }) => source))) return;
+
+    // Restore only attributes still owned by us; preserve the page's new source.
+    const restoreOwned = (element, original, applied) => {
+      original.forEach(([name, value]) => {
+        if (element.getAttribute(name) !== applied.get(name)) return;
+        if (value === null) element.removeAttribute(name);
+        else element.setAttribute(name, value);
+      });
+    };
+    if (state.appliedSrc) {
+      restoreOwned(img, state.attributes, state.appliedAttributes);
+      restoreOwned(img, Object.entries(state.dataAttributes), state.appliedAttributes);
+      state.sources.forEach(({ source, attributes, appliedAttributes }) => {
+        restoreOwned(source, attributes, appliedAttributes);
+      });
+    }
+    this.responsiveImageStates.delete(img);
+    if (img.dataset.mtCacheObjectUrl && window.MangaTranslationCache) {
+      window.MangaTranslationCache.revokeImageUrl(img.dataset.mtCacheObjectUrl);
+    }
+    ['mtOriginalSrc', 'mtTranslated', 'mtCacheKey', 'mtCacheObjectUrl'].forEach(name => delete img.dataset[name]);
+    if (this.processedImages.delete(img)) this.totalProcessed = Math.max(0, this.totalProcessed - 1);
+    this.failedImages.delete(img);
+    this.restoredImageSources.delete(img);
+    this.processingQueue = this.processingQueue.filter(queued => queued !== img);
+    this.activeJobs.forEach((job, jobId) => {
+      if (job.img !== img) return;
+      this.activeJobs.delete(jobId);
+      this.finishImageLoading(null, img);
+    });
+    this.contextMenuLoadingSources.forEach((job, jobId) => {
+      if (job.img === img) this.finishContextMenuLoading(jobId);
+    });
+    this.pendingImages.delete(img);
+    delete img.dataset.mtJobId;
+    if (this.isEnabled) this.scheduleScan();
   }
 
   getImageSourceSignature(img, includeCurrentSrc = true) {
@@ -393,6 +456,8 @@ class MangaTranslator {
     return JSON.stringify([
       includeCurrentSrc ? img.currentSrc : null,
       img.getAttribute('src'), img.getAttribute('srcset'), img.getAttribute('sizes'),
+      ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-highres']
+        .map(name => img.getAttribute(name)),
       picture ? Array.from(picture.querySelectorAll('source')).map(source => [
         source.getAttribute('srcset'), source.getAttribute('sizes'),
         source.getAttribute('media'), source.getAttribute('type')
@@ -406,6 +471,7 @@ class MangaTranslator {
     const picture = img.parentElement?.tagName === 'PICTURE' ? img.parentElement : null;
     const state = {
       originalSrc: this.getCanonicalSource(img),
+      sourceSignature: this.getImageSourceSignature(img, false),
       attributes: ['src', 'srcset', 'sizes'].map(name => [name, img.getAttribute(name)]),
       dataAttributes: {},
       sources: picture ? Array.from(picture.querySelectorAll('source')).map(source => ({
@@ -426,30 +492,35 @@ class MangaTranslator {
 
   setTranslatedImageSource(img, imageUrl) {
     const state = this.captureImageSource(img);
-    this.isSelfMutating = true;
-    try {
-      img.removeAttribute('srcset');
-      img.removeAttribute('sizes');
-      state.sources.forEach(({ source }) => {
-        source.removeAttribute('srcset');
-        source.srcset = imageUrl;
-      });
-      img.dataset.mtOriginalSrc = state.originalSrc;
-      img.dataset.mtTranslated = '1';
-      img.src = imageUrl;
-      state.appliedSrc = imageUrl;
+    img.removeAttribute('srcset');
+    img.removeAttribute('sizes');
+    state.sources.forEach(({ source }) => {
+      source.removeAttribute('srcset');
+      source.srcset = imageUrl;
+    });
+    img.dataset.mtOriginalSrc = state.originalSrc;
+    img.dataset.mtTranslated = '1';
+    img.src = imageUrl;
+    state.appliedSrc = imageUrl;
 
-      ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-highres'].forEach(attr => {
-        if (img.hasAttribute(attr)) {
-          img.setAttribute(attr, imageUrl);
-        }
-      });
-    } finally {
-      setTimeout(() => { this.isSelfMutating = false; }, 50);
-    }
+    ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-highres'].forEach(attr => {
+      if (img.hasAttribute(attr)) {
+        img.setAttribute(attr, imageUrl);
+      }
+    });
+    state.appliedAttributes = new Map(
+      [...state.attributes.map(([name]) => name), ...Object.keys(state.dataAttributes)]
+        .map(name => [name, img.getAttribute(name)])
+    );
+    state.sources.forEach(sourceState => {
+      sourceState.appliedAttributes = new Map(sourceState.attributes.map(([name]) =>
+        [name, sourceState.source.getAttribute(name)]));
+    });
+    state.appliedSignature = this.getImageSourceSignature(img, false);
   }
 
   restoreImageSource(img) {
+    this.refreshImageSource(img);
     const state = this.responsiveImageStates.get(img);
     if (state) {
       const restoreAttributes = (element, attributes) => attributes.forEach(([name, value]) => {
@@ -477,12 +548,27 @@ class MangaTranslator {
     return {
       img,
       originalSrc: canonicalSrc,
+      sourceSignature: this.getImageSourceSignature(img, false),
+      sourceElements: this.getPictureSources(img),
       cacheKey: cache ? cache.buildCacheKey(
         settings,
         canonicalSrc,
         window.location.href
       ) : ''
     };
+  }
+
+  isImageSourceCurrent({ img, originalSrc, sourceSignature, sourceElements }) {
+    return img.isConnected && this.getCanonicalSource(img) === originalSrc &&
+      this.hasSamePictureSources(img, sourceElements) &&
+      this.getImageSourceSignature(img, false) === sourceSignature;
+  }
+
+  assertImageSourceCurrent(descriptor) {
+    if (this.isImageSourceCurrent(descriptor)) return;
+    const error = new Error('The image source changed while translation was pending.');
+    error.code = 'IMAGE_SOURCE_CHANGED';
+    throw error;
   }
 
   async restoreCachedImages(settings, candidateImages, generation = this.operationGeneration) {
@@ -506,9 +592,18 @@ class MangaTranslator {
     let restored = 0;
     for (const descriptor of descriptors) {
       if (!this.isEnabled || generation !== this.operationGeneration) break;
-      if (!descriptor.img.isConnected || !this.canProcessImage(descriptor.img)) continue;
+      if (!this.isImageSourceCurrent(descriptor) || !this.canProcessImage(descriptor.img)) continue;
       const cached = cachedEntries.get(descriptor.cacheKey);
       if (!cached) continue;
+      if (this.hasResponsiveImageSource(descriptor.img)) {
+        try {
+          await this.waitForImageReady(descriptor.img);
+        } catch {
+          continue;
+        }
+        if (!this.isEnabled || generation !== this.operationGeneration) break;
+        if (!this.isImageSourceCurrent(descriptor) || !this.canProcessImage(descriptor.img)) continue;
+      }
 
       const imageUrl = cache.createImageUrl(cached);
       if (!imageUrl) continue;
@@ -542,6 +637,7 @@ class MangaTranslator {
   }
 
   canProcessImage(img) {
+    this.refreshImageSource(img);
     if (this.processedImages.has(img) || this.pendingImages.has(img)) return false;
     const restoredSource = this.restoredImageSources.get(img);
     if (restoredSource) {
@@ -658,7 +754,9 @@ class MangaTranslator {
       settings,
       originalWidth: img.naturalWidth,
       originalHeight: img.naturalHeight,
-      cacheKey: descriptor.cacheKey
+      cacheKey: descriptor.cacheKey,
+      sourceSignature: descriptor.sourceSignature,
+      sourceElements: descriptor.sourceElements
     };
     this.failedImages.delete(img);
     this.pendingImages.add(img);
@@ -675,6 +773,7 @@ class MangaTranslator {
       const result = await this.translateImage(job);
       const isCurrentJob = this.activeJobs.get(jobId) === job && img.dataset.mtJobId === jobId;
       if (!isCurrentJob || generation !== this.operationGeneration || !img.isConnected) return;
+      this.assertImageSourceCurrent(job);
 
       if (result.success && result.data) {
         if (img.dataset.mtCacheObjectUrl && window.MangaTranslationCache) {
@@ -715,8 +814,6 @@ class MangaTranslator {
     } catch (e) {
       if (this.activeJobs.get(jobId) !== job || img.dataset.mtJobId !== jobId) return;
       if (e && (e.code === 'IMAGE_NOT_READY' || e.code === 'IMAGE_SOURCE_CHANGED')) {
-        delete img.dataset.mtOriginalSrc;
-        delete img.dataset.mtCacheKey;
         this.scheduleScan();
       } else {
         this.recordImageFailure(img, e && e.message || String(e));
@@ -737,7 +834,13 @@ class MangaTranslator {
 
   async translateImage(job) {
     const settings = job.settings;
-    const fileData = await this.getImageDataUrl(job.img, job.originalSrc);
+    const fileData = await this.getImageDataUrl(job.img, job.originalSrc, job);
+    this.assertImageSourceCurrent(job);
+    if (!this.isEnabled || job.generation !== this.operationGeneration || this.activeJobs.get(job.id) !== job) {
+      const error = new Error('The translation request was cancelled.');
+      error.code = 'JOB_CANCELLED';
+      throw error;
+    }
 
     return this.sendMessage({
       action: 'inpaintPageStream',
@@ -864,12 +967,12 @@ class MangaTranslator {
 
   findImageBySrc(srcUrl) {
     if (!srcUrl) return null;
+    const matches = img => img.isConnected &&
+      (this.getCanonicalSource(img) === srcUrl || img.currentSrc === srcUrl || img.src === srcUrl);
     for (const img of this.processedImages) {
-      if (img.currentSrc === srcUrl || img.src === srcUrl || img.dataset.mtOriginalSrc === srcUrl) return img;
+      if (matches(img)) return img;
     }
-    return Array.from(document.images).find(
-      img => img.currentSrc === srcUrl || img.src === srcUrl || img.dataset.mtOriginalSrc === srcUrl
-    ) || null;
+    return Array.from(document.images).find(matches) || null;
   }
 
   applyInpaintBySrc(jobId, dataUrl) {
@@ -878,6 +981,10 @@ class MangaTranslator {
     const { img, settings, originalSrc, originalWidth, originalHeight, cacheKey } = job;
     if (job.generation !== this.operationGeneration || !img.isConnected ||
         this.latestContextJobs.get(img) !== jobId) return;
+    if (!this.isImageSourceCurrent(job)) {
+      if (this.isEnabled) this.scheduleScan();
+      return;
+    }
     if (img.dataset.mtCacheObjectUrl && window.MangaTranslationCache) {
       window.MangaTranslationCache.revokeImageUrl(img.dataset.mtCacheObjectUrl);
       delete img.dataset.mtCacheObjectUrl;
@@ -1088,25 +1195,14 @@ class MangaTranslator {
   setupMutationObserver() {
     if (this.imageObserver) return;
     const observer = new MutationObserver((mutations) => {
-      if (!this.isEnabled || this.isSelfMutating) return;
       let hasNewImages = false;
       for (const mutation of mutations) {
         if (mutation.type === 'attributes' && ['IMG', 'SOURCE'].includes(mutation.target.nodeName)) {
-          const img = mutation.target.nodeName === 'IMG'
-            ? mutation.target : mutation.target.parentElement?.querySelector('img');
-          if (!img) continue;
-
-          if (this.processedImages.has(img) && img.dataset.mtTranslated === '1') {
-            const state = this.responsiveImageStates.get(img);
-            if (state && state.appliedSrc && img.src !== state.appliedSrc) {
-              img.src = state.appliedSrc;
-            }
-            continue;
-          }
-
-          if (this.canProcessImage(img)) {
-            hasNewImages = true;
-          }
+          const images = mutation.target.nodeName === 'IMG'
+            ? [mutation.target] : Array.from(mutation.target.parentElement?.querySelectorAll('img') || []);
+          images.forEach(img => {
+            if (this.canProcessImage(img)) hasNewImages = true;
+          });
           continue;
         }
         for (const node of mutation.addedNodes) {
@@ -1116,7 +1212,7 @@ class MangaTranslator {
           }
         }
       }
-      if (hasNewImages) {
+      if (hasNewImages && this.isEnabled) {
         this.scheduleScan(600);
       }
     });
@@ -1124,7 +1220,8 @@ class MangaTranslator {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['src', 'srcset', 'sizes', 'media', 'type']
+      attributeFilter: ['src', 'srcset', 'sizes', 'media', 'type',
+        'data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-highres']
     });
     this.imageObserver = observer;
 
@@ -1178,14 +1275,24 @@ class MangaTranslator {
     });
   }
 
-  async getImageDataUrl(img, canonicalSrc) {
+  async getImageDataUrl(img, canonicalSrc, descriptor = this.getImageCacheDescriptor(img, this.settings)) {
+    this.assertImageSourceCurrent(descriptor);
     if (canonicalSrc && canonicalSrc.startsWith('data:')) {
       return canonicalSrc;
     }
 
     await this.waitForImageReady(img);
+    this.assertImageSourceCurrent(descriptor);
+    if (!img.complete || img.naturalWidth <= 0 || img.naturalHeight <= 0) {
+      const error = new Error('The original image has not finished loading.');
+      error.code = 'IMAGE_NOT_READY';
+      throw error;
+    }
 
     try {
+      if (this.hasTranslatedImageSource(img) || this.getCurrentImageSource(img) !== canonicalSrc) {
+        throw new Error('Fetch the original source instead of capturing different pixels.');
+      }
       const canvas = document.createElement('canvas');
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
@@ -1194,19 +1301,24 @@ class MangaTranslator {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
+      this.assertImageSourceCurrent(descriptor);
       return canvas.toDataURL('image/jpeg', 0.95);
-    } catch {
+    } catch (error) {
+      if (error.code === 'IMAGE_SOURCE_CHANGED') throw error;
       const fetchTarget = canonicalSrc || this.getCanonicalSource(img) || img.currentSrc || img.src;
       if (fetchTarget && fetchTarget.startsWith('blob:')) {
         const blob = await fetch(fetchTarget).then(r => r.blob());
-        return await new Promise((resolve, reject) => {
+        const data = await new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onloadend = () => resolve(reader.result);
           reader.onerror = () => reject(new Error('Failed to read blob'));
           reader.readAsDataURL(blob);
         });
+        this.assertImageSourceCurrent(descriptor);
+        return data;
       }
       const result = await this.sendMessage({ action: 'fetchImage', url: fetchTarget });
+      this.assertImageSourceCurrent(descriptor);
       if (result.success && result.data) return result.data;
       throw new Error('Cannot access image: ' + (result.error || 'Failed to capture image data.'));
     }
