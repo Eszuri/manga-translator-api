@@ -7,7 +7,9 @@ from pathlib import Path
 
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFile
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 from app.services.comic_text_detector import ComicTextDetector
 from app.services.detector import (

@@ -142,11 +142,23 @@ class MangaTypesettingService:
         target_h: int,
         draw: ImageDraw.ImageDraw,
         page_scale: float = 1.0,
-        font_scale: float = 1.0
+        font_scale: float = 1.0,
+        min_font_size: int = 12
     ) -> Tuple[ImageFont.ImageFont, List[str], List[int], int]:
         MIN_FONT_SIZE = 12
-        page_cap = max(MIN_FONT_SIZE, int(round(34 * page_scale * font_scale)))
-        width_cap = max(MIN_FONT_SIZE, int(round(max(14 * page_scale, target_w * 0.32) * font_scale)))
+        words_count = len(text.strip().split())
+        if len(text.strip()) <= 2:
+            base_cap = 24
+        elif words_count >= 15:
+            base_cap = 22
+        elif words_count >= 8:
+            base_cap = 26
+        elif words_count >= 5:
+            base_cap = 30
+        else:
+            base_cap = 38
+        page_cap = max(MIN_FONT_SIZE, int(round(base_cap * page_scale * font_scale)))
+        width_cap = max(MIN_FONT_SIZE, int(round(max(20 * page_scale, target_w * 0.45) * font_scale)))
         max_size = max(MIN_FONT_SIZE, min(target_h, page_cap, width_cap))
 
         best_font = None
@@ -154,7 +166,7 @@ class MangaTypesettingService:
         best_line_heights = []
         best_spacing = 0
 
-        low = MIN_FONT_SIZE
+        low = max(MIN_FONT_SIZE, min_font_size)
         high = max_size
 
         while low <= high:
@@ -176,7 +188,7 @@ class MangaTypesettingService:
                 high = mid - 1
 
         if best_font is None:
-            best_font = self._get_font(MIN_FONT_SIZE)
+            best_font = self._get_font(max(MIN_FONT_SIZE, min_font_size))
             stroke_width = max(2, int(round(best_font.size * 0.08)))
             best_lines = self._wrap_text(
                 text, best_font, target_w, draw, stroke_width=stroke_width
@@ -205,6 +217,7 @@ class MangaTypesettingService:
 
         page_scale = max(0.5, min(output_img.width / 900.0, output_img.height / 1200.0))
         MIN_FONT_SIZE = 12
+        hard_min_font = max(MIN_FONT_SIZE, int(round(14 * page_scale * font_scale)))
 
         for bubble in bubbles:
             text = bubble.translation or bubble.text
@@ -214,57 +227,76 @@ class MangaTypesettingService:
             if self.all_caps:
                 text = text.upper()
 
-            bbox = bubble.layout_box or bubble.text_box or bubble.bounding_box
-            bw = max(1, bbox.width)
-            bh = max(1, bbox.height)
-            center_x = bbox.x + bw / 2.0
-            center_y = bbox.y + bh / 2.0
+            words = text.strip().split()
+            bb = bubble.bounding_box
+            lb = bubble.layout_box
+            tb = bubble.text_box
 
-            pad_ratio = 0.08 if bubble.layout_box else 0.12
-            init_target_w = max(20, int(bw * (1.0 - pad_ratio)))
-            init_target_h = max(20, int(bh * (1.0 - pad_ratio)))
+            if bb:
+                center_x = bb.x + bb.width / 2.0
+                center_y = bb.y + bb.height / 2.0
+                bubble_w = int(bb.width * 0.88)
+                bubble_h = int(bb.height * 0.90)
+            else:
+                fallback_box = lb or tb
+                if fallback_box:
+                    center_x = fallback_box.x + fallback_box.width / 2.0
+                    center_y = fallback_box.y + fallback_box.height / 2.0
+                else:
+                    center_x = output_img.width / 2.0
+                    center_y = output_img.height / 2.0
+                bubble_w = 0
+                bubble_h = 0
+
+            box_w = int(lb.width * 0.95) if lb else (int(tb.width * 0.95) if tb else 0)
+            box_h = int(lb.height * 0.95) if lb else (int(tb.height * 0.95) if tb else 0)
+
+            avail_w = max(24, max(box_w, bubble_w))
+            avail_h = max(24, max(box_h, bubble_h))
+
+            if avail_h > avail_w * 1.3:
+                avail_w = max(avail_w, min(int(max(avail_w * 1.25, avail_h * 0.50)), output_img.width - 32))
 
             font, lines, line_heights, spacing = self.find_optimal_font_and_lines(
                 text=text,
-                target_w=init_target_w,
-                target_h=init_target_h,
+                target_w=avail_w,
+                target_h=avail_h,
                 draw=draw,
                 page_scale=page_scale,
-                font_scale=font_scale
+                font_scale=font_scale,
+                min_font_size=hard_min_font
             )
 
             stroke_width = max(2, int(round(font.size * 0.08))) if stroke_color else 0
             text_w, text_h, _ = self._measure_text_block(lines, font, draw, stroke_width=stroke_width)
 
-            if (text_w > init_target_w or text_h > init_target_h) and (init_target_w < bw or init_target_h < bh):
-                full_w = max(20, bw - 4)
-                full_h = max(20, bh - 4)
-                font_f, lines_f, heights_f, sp_f = self.find_optimal_font_and_lines(
+            if text_w > avail_w or text_h > avail_h:
+                f_try = self._get_font(hard_min_font)
+                sw_t = max(2, int(round(f_try.size * 0.08))) if stroke_color else 0
+                max_w = max(
+                    draw.textbbox((0, 0), w_item, font=f_try, stroke_width=sw_t)[2] -
+                    draw.textbbox((0, 0), w_item, font=f_try, stroke_width=sw_t)[0]
+                    for w_item in words
+                )
+                needed_w = max(avail_w, max_w + 14)
+                exp_w = min(output_img.width - 32, max(needed_w, int(avail_w * 1.20)))
+                exp_h = min(output_img.height - 32, max(avail_h, int(avail_h * 1.25)))
+
+                font_exp, lines_exp, heights_exp, sp_exp = self.find_optimal_font_and_lines(
                     text=text,
-                    target_w=full_w,
-                    target_h=full_h,
+                    target_w=exp_w,
+                    target_h=exp_h,
                     draw=draw,
                     page_scale=page_scale,
-                    font_scale=font_scale
+                    font_scale=font_scale,
+                    min_font_size=hard_min_font
                 )
-                tw_f, th_f, _ = self._measure_text_block(lines_f, font_f, draw, stroke_width=stroke_width)
-                if tw_f <= full_w and th_f <= full_h:
-                    font, lines, line_heights, spacing = font_f, lines_f, heights_f, sp_f
-                    text_w, text_h = tw_f, th_f
+                sw_exp = max(2, int(round(font_exp.size * 0.08))) if stroke_color else 0
+                tw_exp, th_exp, _ = self._measure_text_block(lines_exp, font_exp, draw, stroke_width=sw_exp)
 
-            if text_w > bw or text_h > bh:
-                font = self._get_font(MIN_FONT_SIZE)
-                stroke_width = max(2, int(round(font.size * 0.08))) if stroke_color else 0
-                expanded_wrap_w = max(
-                    bw, min(int(max(bw * 1.30, bh * 0.85, 110 * page_scale)), output_img.width - 24)
-                )
-                lines = self._wrap_text(
-                    text, font, expanded_wrap_w, draw, stroke_width=stroke_width
-                )
-                text_w, text_h, line_heights = self._measure_text_block(
-                    lines, font, draw, stroke_width=stroke_width
-                )
-                spacing = max(2, int(round(font.size * self.line_spacing_ratio)))
+                font, lines, line_heights, spacing = font_exp, lines_exp, heights_exp, sp_exp
+                stroke_width = sw_exp
+                text_w, text_h = tw_exp, th_exp
 
             if not lines:
                 continue
