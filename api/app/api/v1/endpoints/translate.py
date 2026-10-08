@@ -17,6 +17,7 @@ from app.schemas import (
 )
 from app.core.config import settings
 from app.core.image_worker import run_image_task, stream_with_heartbeats
+from app.core.image_utils import to_rgb_image
 from app.services.detector import sort_manga_reading_order
 from app.services.ocr_service import get_ocr_service
 from app.services.translation_service import get_translation_service
@@ -47,7 +48,10 @@ def detect_page(image, reading_direction, include_seg=False):
     seg_mask = None
     if include_seg:
         comic_det = getattr(detector, "comic_detector", detector)
-        if hasattr(comic_det, "detect_raw") and hasattr(comic_det, "get_unletterboxed_seg"):
+        if hasattr(comic_det, "get_cached_segmentation"):
+            seg_mask = comic_det.get_cached_segmentation(image)
+        if (seg_mask is None and hasattr(comic_det, "detect_raw")
+                and hasattr(comic_det, "get_unletterboxed_seg")):
             _, seg, _, _, (dw, dh) = comic_det.detect_raw(image)
             seg_mask = comic_det.get_unletterboxed_seg(seg, image.width, image.height, dw, dh)
     return bubbles, seg_mask
@@ -59,7 +63,7 @@ def recognize_bubbles(image, bubbles):
 
 def encode_image(image):
     out_buf = io.BytesIO()
-    image.convert("RGB").save(out_buf, format="JPEG", quality=95)
+    to_rgb_image(image).save(out_buf, format="JPEG", quality=95)
     return out_buf.getvalue()
 
 
@@ -157,6 +161,8 @@ async def inpaint_and_translate_manga_page(
     ),
     font_scale: float = Form(
         1.0,
+        gt=0,
+        allow_inf_nan=False,
         description="Font size multiplier (default: 1.0)"
     ),
     all_caps: bool = Form(
@@ -253,6 +259,8 @@ async def inpaint_stream_manga_page(
     ),
     font_scale: float = Form(
         1.0,
+        gt=0,
+        allow_inf_nan=False,
         description="Font size multiplier (default: 1.0)"
     ),
     all_caps: bool = Form(

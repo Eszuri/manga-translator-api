@@ -246,9 +246,20 @@ class BalloonRegions:
                 supported_area = max(text.area, sum(b.area for b in self.text_boxes
                     if 0 <= int(b.center_x) < self.w and 0 <= int(b.center_y) < self.h
                     and labels[int(b.center_y), int(b.center_x)] == label))
+                # A short Japanese column can occupy very little of a balloon.
+                # Relax the text-area ratio only for a compact, enclosed region
+                # found with the smallest closing kernel, not open page paper
+                # or regions created by bridging larger gaps in the artwork.
+                short_enclosed = (
+                    level == 0 and x > 0 and y > 0
+                    and x + w < self.w and y + h < self.h
+                    and area / (w * h) >= 0.55
+                    and text.width <= w * 0.35 and text.height <= h * 0.55
+                )
+                area_ratio = 64 if short_enclosed else 14
                 if (area < 40 or area > self.w * self.h * 0.28
                         or w > self.w * 0.8 or h > self.h * 0.75
-                        or w * h > supported_area * 14 or area / (w * h) < 0.3):
+                        or w * h > supported_area * area_ratio or area / (w * h) < 0.3):
                     continue
                 if not (x <= text.center_x < x + w and y <= text.center_y < y + h):
                     continue

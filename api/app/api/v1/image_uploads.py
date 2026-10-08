@@ -6,6 +6,7 @@ from PIL import Image, UnidentifiedImageError
 
 from app.core.config import settings
 from app.core.image_worker import run_decode_task
+from app.core.image_utils import to_rgb_image
 
 
 ALLOWED_CONTENT_TYPES = {
@@ -57,9 +58,9 @@ def decode_validated_image(contents: bytes) -> Image.Image:
                 )
             probe.verify()
 
-            image = Image.open(BytesIO(contents))
-            image.load()
-            return image
+            with Image.open(BytesIO(contents)) as image:
+                image.load()
+                return to_rgb_image(image)
     except HTTPException:
         raise
     except (

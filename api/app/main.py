@@ -53,6 +53,7 @@ app.add_middleware(
     ImageRequestLimitMiddleware,
     max_requests=settings.MAX_IMAGE_REQUESTS,
     api_prefix=settings.API_V1_PREFIX,
+    max_upload_bytes=settings.MAX_UPLOAD_BYTES,
 )
 
 app.add_middleware(

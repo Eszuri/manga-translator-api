@@ -79,6 +79,7 @@ ACTIVE_CHILD_PIDS: set[int] = set()
 EXTENSION_BUILD_DONE = threading.Event()
 EXTENSION_BUILD_DONE.set()
 EXTENSION_BUILD_RUNNING = False
+EXTENSION_BUILD_LOCK = threading.Lock()
 _CTRL_HANDLER_REF = None
 
 
@@ -204,13 +205,15 @@ def find_chromium_browser() -> str | None:
 
 def build_extension_package_sync(log_func=None) -> bool:
     global EXTENSION_BUILD_RUNNING
+    if log_func is None:
+        from rich import print as rprint
+        log_func = rprint
+    if not EXTENSION_BUILD_LOCK.acquire(blocking=False):
+        log_func("[yellow]An extension build is already running.[/yellow]")
+        return False
     EXTENSION_BUILD_DONE.clear()
     EXTENSION_BUILD_RUNNING = True
     try:
-        if log_func is None:
-            from rich import print as rprint
-            log_func = rprint
-
         manifest = EXTENSION_DIR / "manifest.json"
         if not manifest.exists():
             log_func(f"[red]Manifest ekstensi tidak ditemukan: {manifest}[/red]")
@@ -255,11 +258,14 @@ def build_extension_package_sync(log_func=None) -> bool:
                 if key_output.exists():
                     args.append(f"--pack-extension-key={key_output}")
 
-                chrome_proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                chrome_proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 ACTIVE_CHILD_PIDS.add(chrome_proc.pid)
                 try:
                     chrome_proc.wait(timeout=30)
                 finally:
+                    if chrome_proc.poll() is None:
+                        cleanup_pid(chrome_proc.pid)
+                        chrome_proc.wait(timeout=5)
                     ACTIVE_CHILD_PIDS.discard(chrome_proc.pid)
 
                 gen_crx = Path(temp_dir) / "extension.crx"
@@ -279,6 +285,7 @@ def build_extension_package_sync(log_func=None) -> bool:
     finally:
         EXTENSION_BUILD_RUNNING = False
         EXTENSION_BUILD_DONE.set()
+        EXTENSION_BUILD_LOCK.release()
 
 
 def format_log_line(prefix: str, text: str) -> str:
@@ -495,11 +502,16 @@ class MangaTranslatorTUI(App):
             self.update_status()
 
     def action_trigger_image_build(self) -> None:
+        if (self.current_task == "Building Extension"
+                or (self.current_task is not None and self.worker_proc is None)):
+            self.log_msg("[yellow]Wait for the current task to finish.[/yellow]")
+            return
         if self.worker_proc and self.worker_proc.returncode is None:
             self.stop_worker()
         else:
             if self.server_proc and self.server_proc.returncode is None:
                 self.stop_server()
+            self.current_task = "Processing Images"
             self.run_image_pipeline()
 
     def stop_worker(self) -> None:
@@ -519,13 +531,17 @@ class MangaTranslatorTUI(App):
         if self.worker_proc and self.worker_proc.returncode is None:
             return
 
-        if not IMAGES_ORIGINAL.exists():
-            self.log_msg(f"[red]Folder not found: {IMAGES_ORIGINAL}[/red]")
-            return
-
-        has_images = any(f.suffix.lower() in IMAGE_EXTENSIONS for f in IMAGES_ORIGINAL.iterdir())
-        if not has_images:
-            self.log_msg(f"[red]No images found in: {IMAGES_ORIGINAL}[/red]")
+        try:
+            if not IMAGES_ORIGINAL.is_dir():
+                raise FileNotFoundError(f"Folder not found: {IMAGES_ORIGINAL}")
+            has_images = any(f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS
+                             for f in IMAGES_ORIGINAL.iterdir())
+            if not has_images:
+                raise FileNotFoundError(f"No images found in: {IMAGES_ORIGINAL}")
+        except OSError as exc:
+            self.log_msg(f"[red]Image error: {exc}[/red]")
+            self.current_task = None
+            self.update_status()
             return
 
         cmd = [str(PYTHON_EXE), "-m", "tools.build_local"]
@@ -582,9 +598,14 @@ class MangaTranslatorTUI(App):
             self.update_status()
 
     def action_trigger_ext_build(self) -> None:
+        if (self.current_task is not None
+                or (self.worker_proc is not None and self.worker_proc.returncode is None)):
+            self.log_msg("[yellow]Wait for the current task to finish.[/yellow]")
+            return
+        self.current_task = "Building Extension"
         self.run_extension_build()
 
-    @work(exclusive=True, group="task_group")
+    @work(exclusive=True, group="extension_group")
     async def run_extension_build(self) -> None:
         if self.worker_proc and self.worker_proc.returncode is None:
             return
@@ -594,8 +615,14 @@ class MangaTranslatorTUI(App):
         self.update_status()
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, build_extension_package_sync, self.log_msg)
-            self.log_msg("[green]Extension built[/green]")
+            def log_from_thread(message):
+                loop.call_soon_threadsafe(self.log_msg, message)
+
+            success = await loop.run_in_executor(None, build_extension_package_sync, log_from_thread)
+            if success:
+                self.log_msg("[green]Extension built[/green]")
+            else:
+                self.log_msg("[red]Extension build failed[/red]")
         except Exception as e:
             self.log_msg(f"[red]Extension error: {e}[/red]")
         finally:
@@ -646,12 +673,13 @@ def run_cli_server():
     proc = subprocess.Popen([str(PYTHON_EXE), "-m", "tools.run_local"], cwd=str(API_DIR), env=env)
     ACTIVE_CHILD_PIDS.add(proc.pid)
     try:
-        proc.wait()
+        return proc.wait()
     except KeyboardInterrupt:
-        pass
+        return 130
     finally:
+        if proc.poll() is None:
+            cleanup_pid(proc.pid)
         ACTIVE_CHILD_PIDS.discard(proc.pid)
-        cleanup_pid(proc.pid)
 
 
 def run_cli_images():
@@ -677,9 +705,10 @@ def run_cli_images():
     except KeyboardInterrupt:
         ret = 1
     finally:
+        if proc.poll() is None:
+            cleanup_pid(proc.pid)
         ACTIVE_CHILD_PIDS.discard(proc.pid)
-        cleanup_pid(proc.pid)
-    sys.exit(ret)
+    return ret
 
 
 def main():
@@ -701,20 +730,17 @@ def main():
         return
 
     if args.server:
-        run_cli_server()
-        return
+        return run_cli_server()
 
     if args.process_images:
-        run_cli_images()
-        return
+        return run_cli_images()
 
     if args.build_ext:
-        build_extension_package_sync()
-        return
+        return 0 if build_extension_package_sync() else 1
 
     app = MangaTranslatorTUI()
     app.run()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

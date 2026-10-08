@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 
 from app.schemas import DetectedBubble
+from app.core.image_utils import to_rgb_image
 
 
 class MangaInpaintingService:
@@ -59,10 +60,17 @@ class MangaInpaintingService:
                     allowed[ty1:ty2, tx1:tx2] |= local_allowed
                     patch = char_mask[ty1:ty2, tx1:tx2].copy()
                     if gray is not None:
-                        ink = (gray[ty1:ty2, tx1:tx2] < 190).astype(np.uint8)
-                        count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
                         evidence = cv2.dilate(patch, np.ones((3, 3), np.uint8))
                         has_evidence = bool(np.any(evidence))
+                        crop_gray = gray[ty1:ty2, tx1:tx2]
+                        # Estimate the background outside detected letters so white
+                        # text on a dark balloon is not discarded as background ink.
+                        background = crop_gray[(local_allowed != 0) & (evidence == 0)]
+                        if background.size == 0:
+                            background = crop_gray[local_allowed != 0]
+                        light_text = background.size > 0 and np.median(background) < 128
+                        ink = (crop_gray > 190 if light_text else crop_gray < 190).astype(np.uint8)
+                        count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
                         patch[:] = 0
                         max_dim = max(20, min(box.width, box.height) * 1.8)
                         for label in range(1, count):
@@ -75,29 +83,6 @@ class MangaInpaintingService:
                                 continue
                             patch[component] = 255
                     final_mask[ty1:ty2, tx1:tx2] |= patch & local_allowed
-
-                if b.bubble_polygon and gray is not None:
-                    polygon = np.asarray(b.bubble_polygon, np.int32)
-                    px, py, pw, ph = cv2.boundingRect(polygon)
-                    px1, py1 = max(0, px), max(0, py)
-                    px2, py2 = min(orig_w, px + pw), min(orig_h, py + ph)
-                    if px2 <= px1 or py2 <= py1:
-                        continue
-                    inner = np.zeros((py2 - py1, px2 - px1), np.uint8)
-                    cv2.fillPoly(inner, [polygon - (px1, py1)], 255)
-                    inset = max(5, round(min(pw, ph) * 0.045))
-                    inner = cv2.erode(inner, cv2.getStructuringElement(
-                        cv2.MORPH_ELLIPSE, (2 * inset + 1, 2 * inset + 1)),
-                        borderType=cv2.BORDER_CONSTANT, borderValue=0)
-                    if np.count_nonzero(inner) < 400:
-                        continue
-                    crop_gray = gray[py1:py2, px1:px2]
-                    white_fraction = np.mean(crop_gray[inner != 0] > 215)
-                    if white_fraction < 0.72:
-                        continue
-                    extra = ((crop_gray < 185) & (inner != 0)).astype(np.uint8) * 255
-                    final_mask[py1:py2, px1:px2] |= extra
-                    allowed[py1:py2, px1:px2] |= inner
 
         if self.dilation_kernel_size > 0 and self.dilation_iterations > 0:
             kernel = cv2.getStructuringElement(
@@ -117,7 +102,7 @@ class MangaInpaintingService:
         if image.width == 0 or image.height == 0:
             return image
 
-        img_rgb = np.array(image.convert("RGB"))
+        img_rgb = np.array(to_rgb_image(image))
         mask = self.create_text_mask(img_rgb.shape, seg_mask=seg_mask, bubbles=bubbles,
                                      source_image=img_rgb)
 
@@ -132,19 +117,4 @@ class MangaInpaintingService:
             flags=self.inpaint_method
         )
         inpainted_rgb = cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB)
-        if bubbles:
-            gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
-            for bubble in bubbles:
-                if not bubble.bubble_polygon:
-                    continue
-                polygon = np.asarray(bubble.bubble_polygon, np.int32)
-                interior = np.zeros(gray.shape, np.uint8)
-                cv2.fillPoly(interior, [polygon], 255)
-                if np.count_nonzero(interior) < 400:
-                    continue
-                if np.mean(gray[interior != 0] > 215) < 0.87:
-                    continue
-                interior = cv2.erode(interior, np.ones((3, 3), np.uint8),
-                                     borderType=cv2.BORDER_CONSTANT, borderValue=0)
-                inpainted_rgb[interior != 0] = 255
         return Image.fromarray(inpainted_rgb)

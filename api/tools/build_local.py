@@ -8,6 +8,7 @@ from pathlib import Path
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 
 from PIL import Image, ImageDraw, ImageFont, ImageFile
+from app.core.image_utils import to_rgb_image
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -152,7 +153,7 @@ def process_page(path: Path, output_dir: Path, detector, ocr, translator,
     timings = {}
     stem = path.stem
     with Image.open(path) as original:
-        image = original.convert("RGB")
+        image = to_rgb_image(original).copy()
     outputs = create_stage_outputs(output_dir, stem)
 
     start = time.perf_counter()

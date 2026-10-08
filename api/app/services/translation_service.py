@@ -22,20 +22,35 @@ def validate_translations(
     dialogue_items: List[Dict[str, Any]], translations: Dict[int, str], engine: str
 ) -> Dict[int, str]:
     cleaned = {}
+    missing = []
+    untranslated = []
     for item in dialogue_items:
         bubble_id = item["id"]
+        if not (item.get("text") or "").strip():
+            continue
         text = translations.get(bubble_id)
         if not isinstance(text, str) or not text.strip():
+            missing.append(bubble_id)
             continue
         normalized = unicodedata.normalize("NFKC", text)
         if re.search(r'[\u3040-\u30ff\u3400-\u9fff]', normalized):
-            logger.warning("%s returned untranslated Japanese text for bubble %s.", engine, bubble_id)
+            untranslated.append(bubble_id)
             continue
-        cleaned[bubble_id] = text
+        cleaned[bubble_id] = text.strip()
+    errors = []
+    if missing:
+        errors.append(f"missing or empty translations for bubble IDs {missing}")
+    if untranslated:
+        errors.append(f"untranslated Japanese text for bubble IDs {untranslated}")
+    if errors:
+        raise TranslationError(f"{engine} returned " + "; ".join(errors) + ".")
     return cleaned
 
 
-def extract_json_from_text(text: str) -> Optional[dict]:
+def extract_json_from_text(text: str) -> Optional[Any]:
+    # Some reasoning models include a separate thought block before the answer.
+    # Never interpret JSON examples from that block as actual translations.
+    text = re.sub(r"^\s*<think>[\s\S]*?</think>", "", text, count=1, flags=re.IGNORECASE)
     text = text.strip()
     if not text:
         return None
@@ -52,11 +67,13 @@ def extract_json_from_text(text: str) -> Optional[dict]:
         except json.JSONDecodeError:
             pass
 
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
+    start = re.search(r"[\[{]", text)
+    if start:
         try:
-            return json.loads(text[start : end + 1])
+            parsed, end = json.JSONDecoder().raw_decode(text[start.start():])
+            # Do not accept only the first of several JSON answers.
+            if not re.search(r"[\[{]", text[start.start() + end:]):
+                return parsed
         except json.JSONDecodeError:
             pass
 
@@ -249,21 +266,14 @@ class MangaTranslationService:
         engine_label = f"llm ({self.model})" if translator != "google" and self.model else translator
         logger.info("[Translate] Engine: %s | Lang: %s | Bubbles: %d", engine_label, target_lang, len(dialogue_items))
 
-        final_engine = translator
         if translator == "google":
             translations_map = await self._call_google_async(dialogue_items, target_lang=target_lang)
         else:
-            try:
-                translations_map = await self._call_llm_async(dialogue_items, target_lang=target_lang)
-            except Exception as e:
-                err_msg = str(e).strip() or type(e).__name__
-                logger.warning("[Translate] Fallback -> google | Lang: %s (Reason: %s)", target_lang, err_msg)
-                final_engine = "google"
-                translations_map = await self._call_google_async(dialogue_items, target_lang=target_lang)
+            translations_map = await self._call_llm_async(dialogue_items, target_lang=target_lang)
 
-        validated = validate_translations(dialogue_items, translations_map, "Google Translate" if final_engine == "google" else "LLM")
+        validated = validate_translations(dialogue_items, translations_map, "Google Translate" if translator == "google" else "LLM")
         elapsed = time.perf_counter() - start_time
-        logger.info("[Translate] Done: %s -> %s (%d bubbles in %.2fs)", final_engine, target_lang, len(validated), elapsed)
+        logger.info("[Translate] Done: %s -> %s (%d bubbles in %.2fs)", translator, target_lang, len(validated), elapsed)
 
         for b in bubbles:
             if b.id in validated:
@@ -276,6 +286,8 @@ class MangaTranslationService:
         dialogue_items: List[Dict[str, Any]],
         target_lang: str = "id"
     ) -> Dict[int, str]:
+        if not dialogue_items:
+            return {}
         if not self.model.strip():
             raise TranslationError("LLM model ID is empty. Set LLM_MODEL in api/.env.")
         if not self.is_configured():
@@ -297,21 +309,46 @@ class MangaTranslationService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                response = await client.post(url, headers=headers, json=payload)
-
-            if response.status_code != 200:
-                raise TranslationError(f"LLM translation failed (HTTP {response.status_code}). Check the model, endpoint, API key, or quota.")
-
-            data = response.json()
-            raw_content = data["choices"][0]["message"]["content"]
-            return self._parse_llm_response(raw_content, dialogue_items)
+            # Both attempts share the original deadline. Format recovery must
+            # not silently double the maximum wait for a page.
+            async with asyncio.timeout(self.timeout_seconds):
+                async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                    for attempt in range(2):
+                        response = await client.post(url, headers=headers, json=payload)
+                        if response.status_code != 200:
+                            raise TranslationError(f"LLM translation failed (HTTP {response.status_code}). Check the model, endpoint, API key, or quota.")
+                        try:
+                            data = response.json()
+                            choice = data["choices"][0]
+                            message = choice["message"]
+                            raw_content = message.get("content")
+                        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+                            raise TranslationError("LLM endpoint returned an invalid chat-completion envelope.") from exc
+                        if message.get("refusal") or choice.get("finish_reason") == "content_filter":
+                            raise TranslationError("LLM refused the translation request or filtered its content.")
+                        try:
+                            if choice.get("finish_reason") == "length":
+                                raise TranslationError("LLM translation output was truncated (finish_reason=length).")
+                            return self._parse_llm_response(raw_content, dialogue_items)
+                        except TranslationError as exc:
+                            if attempt:
+                                raise TranslationError(f"LLM response remained invalid after one format retry: {exc}") from exc
+                            logger.warning("[Translate] LLM response rejected; retrying once: %s", exc)
+                            payload["messages"].append({
+                                "role": "user",
+                                "content": (
+                                    f"The previous response failed validation: {exc} "
+                                    "Return the complete translation again as ONLY a JSON object "
+                                    'with a "translations" array of {"id": integer, "translation": string}. '
+                                    "Include each requested ID exactly once. No reasoning or markdown."
+                                ),
+                            })
 
         except TranslationError:
             raise
         except httpx.ConnectError as e:
             raise TranslationError("Cannot connect to the configured LLM base URL. Verify the address and start the LLM service before retrying.") from e
-        except httpx.TimeoutException as e:
+        except (httpx.TimeoutException, TimeoutError) as e:
             raise TranslationError(f"LLM request timed out after {self.timeout_seconds}s.") from e
         except Exception as e:
             raise TranslationError(f"Invalid LLM translation response: {type(e).__name__}.") from e
@@ -321,21 +358,40 @@ class MangaTranslationService:
         raw_content: str,
         dialogue_items: List[Dict[str, Any]]
     ) -> Dict[int, str]:
+        if not isinstance(raw_content, str):
+            raise TranslationError("LLM message content must be text containing a JSON object.")
         parsed = extract_json_from_text(raw_content)
+        if not isinstance(parsed, (dict, list)):
+            raise TranslationError("LLM returned invalid translation JSON; expected an object or an array of ID-tagged translations.")
         result: Dict[int, str] = {}
+        expected_ids = {item["id"] for item in dialogue_items}
 
-        if parsed and isinstance(parsed, dict):
-            translations_list = parsed.get("translations")
-            if isinstance(translations_list, list):
-                for item in translations_list:
-                    if isinstance(item, dict) and "id" in item and "translation" in item:
-                        if not isinstance(item["translation"], str):
-                            raise TranslationError("LLM translation values must be text.")
-                        result[int(item["id"])] = item["translation"].strip()
-            elif isinstance(parsed, dict):
-                for k, v in parsed.items():
-                    if str(k).isdigit() and isinstance(v, str):
-                        result[int(k)] = v.strip()
+        if isinstance(parsed, list):
+            entries = parsed
+        elif "translations" in parsed:
+            entries = parsed["translations"]
+            if not isinstance(entries, list):
+                raise TranslationError("LLM JSON field 'translations' must be a list.")
+        else:
+            entries = [{"id": key, "translation": value} for key, value in parsed.items()]
+
+        for item in entries:
+            if not isinstance(item, dict) or "id" not in item or "translation" not in item:
+                raise TranslationError("Each LLM translation must contain an ID and translation text.")
+            raw_id = item["id"]
+            if type(raw_id) is int:
+                bubble_id = raw_id
+            elif isinstance(raw_id, str) and re.fullmatch(r"-?[0-9]+", raw_id):
+                bubble_id = int(raw_id)
+            else:
+                raise TranslationError("LLM translation IDs must be integers.")
+            if bubble_id not in expected_ids:
+                raise TranslationError(f"LLM returned an unknown bubble ID: {bubble_id}.")
+            if bubble_id in result:
+                raise TranslationError(f"LLM returned duplicate translations for bubble ID {bubble_id}.")
+            if not isinstance(item["translation"], str):
+                raise TranslationError(f"LLM translation for bubble ID {bubble_id} must be text.")
+            result[bubble_id] = item["translation"].strip()
 
         return validate_translations(dialogue_items, result, "LLM")
 

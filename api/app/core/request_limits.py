@@ -1,6 +1,7 @@
 from contextvars import ContextVar
 from threading import Lock
 
+from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -40,9 +41,11 @@ current_image_request: ContextVar[ImageRequestLease | None] = ContextVar(
 
 
 class ImageRequestLimitMiddleware:
-    def __init__(self, app: ASGIApp, max_requests: int, api_prefix: str):
+    def __init__(self, app: ASGIApp, max_requests: int, api_prefix: str, max_upload_bytes: int):
         self.app = app
         self.max_requests = max_requests
+        # Allow room for multipart boundaries and the small pipeline form fields.
+        self.max_body_bytes = max_upload_bytes + 64 * 1024
         self._lock = Lock()
         self._active = 0
         self._paths = {
@@ -62,6 +65,37 @@ class ImageRequestLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
+        for name, value in scope.get("headers", []):
+            if name.lower() != b"content-length":
+                continue
+            try:
+                oversized = int(value) > self.max_body_bytes
+            except ValueError:
+                continue
+            if oversized:
+                response = JSONResponse(
+                    status_code=413,
+                    content={"detail": "Image request body exceeds the configured size limit."},
+                )
+                await response(scope, receive, send)
+                return
+
+        received_bytes = 0
+
+        async def limited_receive():
+            nonlocal received_bytes
+            message = await receive()
+            if message["type"] == "http.request":
+                received_bytes += len(message.get("body", b""))
+                if received_bytes > self.max_body_bytes:
+                    # FastAPI preserves HTTPException raised while parsing a form.
+                    # Reject this chunk before the multipart parser can spool it.
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Image request body exceeds the configured size limit.",
+                    )
+            return message
+
         with self._lock:
             accepted = self._active < self.max_requests
             if accepted:
@@ -79,7 +113,7 @@ class ImageRequestLimitMiddleware:
         lease = ImageRequestLease(self._release)
         token = current_image_request.set(lease)
         try:
-            await self.app(scope, receive, send)
+            await self.app(scope, limited_receive, send)
         finally:
             current_image_request.reset(token)
             lease.finish_request()

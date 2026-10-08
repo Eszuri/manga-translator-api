@@ -1,9 +1,11 @@
 import os
+import math
+import unicodedata
 from typing import List, Tuple, Optional
-import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from app.schemas import DetectedBubble
+from app.core.image_utils import to_rgb_image
 
 
 DEFAULT_FONT_PATH = os.path.join(
@@ -88,6 +90,8 @@ class MangaTypesettingService:
             if line_w <= max_width:
                 current_line.append(word)
             elif not current_line:
+                # Keep oversized words intact so font fitting must shrink the
+                # font instead of accepting a larger font with broken words.
                 lines.append(word)
                 current_line = []
             else:
@@ -135,6 +139,11 @@ class MangaTypesettingService:
         total_h = sum(line_heights) + max(0, len(lines) - 1) * spacing
         return max_w, total_h, line_heights
 
+    @staticmethod
+    def _preferred_font_size(text: str, page_scale: float, font_scale: float, limit: int) -> int:
+        base = 30 if len(text.strip()) <= 2 else (32 if len(text.split()) >= 15 else 38)
+        return max(12, int(round(min(limit, base * page_scale * font_scale))))
+
     def find_optimal_font_and_lines(
         self,
         text: str,
@@ -143,23 +152,16 @@ class MangaTypesettingService:
         draw: ImageDraw.ImageDraw,
         page_scale: float = 1.0,
         font_scale: float = 1.0,
-        min_font_size: int = 12
+        min_font_size: int = 12,
+        stroke_enabled: bool = True,
+        max_font_size: Optional[int] = None
     ) -> Tuple[ImageFont.ImageFont, List[str], List[int], int]:
         MIN_FONT_SIZE = 12
-        words_count = len(text.strip().split())
-        if len(text.strip()) <= 2:
-            base_cap = 24
-        elif words_count >= 15:
-            base_cap = 22
-        elif words_count >= 8:
-            base_cap = 26
-        elif words_count >= 5:
-            base_cap = 30
-        else:
-            base_cap = 38
-        page_cap = max(MIN_FONT_SIZE, int(round(base_cap * page_scale * font_scale)))
-        width_cap = max(MIN_FONT_SIZE, int(round(max(20 * page_scale, target_w * 0.45) * font_scale)))
-        max_size = max(MIN_FONT_SIZE, min(target_h, page_cap, width_cap))
+        if not math.isfinite(font_scale) or font_scale <= 0:
+            raise TypesettingError("Font scale must be a finite number greater than zero.")
+        max_size = self._preferred_font_size(text, page_scale, font_scale, target_h)
+        if max_font_size is not None:
+            max_size = min(max_size, max_font_size)
 
         best_font = None
         best_lines = []
@@ -172,7 +174,7 @@ class MangaTypesettingService:
         while low <= high:
             mid = (low + high) // 2
             test_font = self._get_font(mid)
-            stroke_width = max(2, int(round(test_font.size * 0.08)))
+            stroke_width = max(2, int(round(test_font.size * 0.08))) if stroke_enabled else 0
             lines = self._wrap_text(
                 text, test_font, target_w, draw, stroke_width=stroke_width
             )
@@ -188,17 +190,246 @@ class MangaTypesettingService:
                 high = mid - 1
 
         if best_font is None:
-            best_font = self._get_font(max(MIN_FONT_SIZE, min_font_size))
-            stroke_width = max(2, int(round(best_font.size * 0.08)))
-            best_lines = self._wrap_text(
-                text, best_font, target_w, draw, stroke_width=stroke_width
+            raise TypesettingError(
+                f"Translated text does not fit in the safe area ({target_w} x {target_h} pixels, "
+                f"minimum font size {max(MIN_FONT_SIZE, min_font_size)})."
             )
-            _, _, best_line_heights = self._measure_text_block(
-                best_lines, best_font, draw, stroke_width=stroke_width
-            )
-            best_spacing = max(2, int(round(best_font.size * self.line_spacing_ratio)))
 
         return best_font, best_lines, best_line_heights, best_spacing
+
+    def _readable_layout(self, text, box, image_size, draw, page_scale,
+                         font_scale, stroke_enabled, obstacles,
+                         position_guides=None, all_candidates=False):
+        page_w, page_h = image_size
+        preferred = self._preferred_font_size(
+            text, page_scale, font_scale, min(page_w, page_h)
+        )
+        minimum = max(12, int(round(min(preferred, 18 * page_scale * font_scale))))
+        sizes = sorted({minimum, *(max(minimum, int(round(preferred * ratio)))
+                                  for ratio in (1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.6, 0.5))},
+                       reverse=True)
+        x1, y1, x2, y2 = box
+        original_w, original_h = x2 - x1, y2 - y1
+        fitted_blocks = 0
+        candidates = []
+
+        # Allow a modest spill around narrow vertical dialogue, not a new
+        # page-wide caption. Only the longest word at the readable floor may
+        # exceed this width budget; whole words must never be split.
+        floor_font = self._get_font(minimum)
+        floor_stroke = max(2, int(round(minimum * 0.08))) if stroke_enabled else 0
+        floor_boxes = [draw.textbbox((0, 0), word, font=floor_font,
+                                    stroke_width=floor_stroke) for word in text.split()]
+        floor_word_width = max(bounds[2] - bounds[0] for bounds in floor_boxes)
+        max_width = min(page_w, int(math.ceil(max(
+            original_w * 1.6, min(240 * page_scale, original_h * 0.85),
+            floor_word_width,
+        ))))
+        max_height = min(page_h, int(math.ceil(max(original_h * 1.3, preferred * 3))))
+
+        # Evaluate compactness as well as font size. Previously the first font
+        # with any page-sized placement won, even across several art panels.
+        for size in sizes:
+            font = self._get_font(size)
+            stroke = max(2, int(round(font.size * 0.08))) if stroke_enabled else 0
+            word_boxes = [draw.textbbox((0, 0), word, font=font, stroke_width=stroke)
+                          for word in set(text.split())]
+            longest = max(bounds[2] - bounds[0] for bounds in word_boxes)
+            required_w = max(original_w, longest)
+            if longest > max_width:
+                continue
+            widths = sorted({longest, min(original_w, max_width), max_width,
+                             *(min(max_width, max(longest, int(round(original_w * ratio))))
+                               for ratio in (0.5, 0.75)),
+                             *(min(max_width, int(math.ceil(required_w * ratio)))
+                               for ratio in (1.0, 1.25, 1.5, 2.0))})
+            for width in widths:
+                try:
+                    fitted_font, lines, heights, spacing = self.find_optimal_font_and_lines(
+                        text, width, max_height, draw, page_scale=page_scale,
+                        font_scale=font_scale, min_font_size=size, max_font_size=size,
+                        stroke_enabled=stroke_enabled,
+                    )
+                except TypesettingError:
+                    continue
+                fitted_blocks += 1
+                text_w, text_h, _ = self._measure_text_block(lines, fitted_font, draw, stroke)
+                gap = max(2, int(round(size * 0.20)))
+                placements = self._place_text_blocks(
+                    box, image_size, (text_w, text_h), obstacles, gap, page_scale,
+                    position_guides=position_guides,
+                )
+                for bounds, movement in placements:
+                    result = (fitted_font, lines, heights, spacing, bounds)
+                    overflow_x = max(0, text_w / original_w - 1)
+                    overflow_y = max(0, text_h / original_h - 1)
+                    score = (2 * math.log(preferred / size) ** 2
+                             + 0.25 * (overflow_x ** 2 + overflow_y ** 2)
+                             + 2 * movement / max(original_w, original_h) ** 2)
+                    candidates.append(((score, -size, movement), result))
+        if candidates:
+            if not all_candidates:
+                return min(candidates, key=lambda candidate: candidate[0])[1]
+            # Keep alternatives at every font size, rather than letting many
+            # nearly identical large layouts crowd smaller feasible ones out.
+            unique, per_size, results = set(), {}, []
+            for _, result in sorted(candidates, key=lambda candidate: candidate[0]):
+                font, lines, _, _, bounds = result
+                key = (font.size, tuple(lines), bounds)
+                if key in unique or per_size.get(font.size, 0) >= 16:
+                    continue
+                unique.add(key)
+                per_size[font.size] = per_size.get(font.size, 0) + 1
+                results.append(result)
+            return results
+        if not fitted_blocks:
+            raise TypesettingError(
+                f"Whole-word text cannot fit in the local {max_width} x {max_height} pixel area "
+                f"at readable font sizes {minimum}-{preferred}."
+            )
+        raise TypesettingError(
+            f"No non-overlapping readable text placement near anchor {box} on the "
+            f"{page_w} x {page_h} pixel page; tried reflowing and shifting text "
+            f"at font sizes {minimum}-{preferred} against {len(obstacles)} text regions."
+        )
+
+    @staticmethod
+    def _place_text_block(box, image_size, text_size, obstacles, gap, page_scale):
+        placements = MangaTypesettingService._place_text_blocks(
+            box, image_size, text_size, obstacles, gap, page_scale
+        )
+        return placements[0] if placements else None
+
+    @staticmethod
+    def _place_text_blocks(box, image_size, text_size, obstacles, gap, page_scale,
+                           position_guides=None):
+        page_w, page_h = image_size
+        text_w, text_h = text_size
+        if text_w <= 0 or text_h <= 0 or text_w > page_w or text_h > page_h:
+            return []
+        x1, y1, x2, y2 = box
+        # Start from the nearest on-page position. The mandatory edge correction
+        # is not an optional shift toward a different dialogue or panel.
+        center_left = max(0, min(page_w - text_w, (x1 + x2 - text_w) / 2))
+        center_top = max(0, min(page_h - text_h, (y1 + y2 - text_h) / 2))
+        # Narrow Japanese columns need horizontal room for whole Latin words.
+        # Permit moving the overflow portion while keeping the block attached
+        # to its own anchor; the layout dimensions remain locally bounded.
+        shift_x = max((x2 - x1) * 0.25, (text_w - (x2 - x1)) / 2, 12 * page_scale)
+        shift_y = max((y2 - y1) * 0.25, (text_h - (y2 - y1)) / 2, 12 * page_scale)
+        positions = {(center_left, center_top), (x1, center_top),
+                     (x2 - text_w, center_top), (center_left, y1),
+                     (center_left, y2 - text_h)}
+        # Endpoints are useful even when a neighbour also has to move. Only
+        # looking next to its original box cannot discover such joint layouts.
+        positions.update((center_left + dx, center_top + dy)
+                         for dx in (-shift_x, 0, shift_x)
+                         for dy in (-shift_y, 0, shift_y))
+        for other in (*obstacles, *(position_guides or ())):
+            if (other[2] + gap < center_left - shift_x
+                    or other[0] - gap > center_left + shift_x + text_w
+                    or other[3] + gap < center_top - shift_y
+                    or other[1] - gap > center_top + shift_y + text_h):
+                continue
+            lefts = (other[0] - gap - text_w, other[2] + gap)
+            tops = (other[1] - gap - text_h, other[3] + gap)
+            positions.update((left, center_top) for left in lefts)
+            positions.update((center_left, top) for top in tops)
+            positions.update((left, top) for left in lefts for top in tops)
+
+        # Shifts stay local and intersect their own anchor, so a translation
+        # cannot jump to an unrelated empty panel merely to avoid a collision.
+        local = set()
+        for left, top in positions:
+            left = max(0, min(page_w - text_w, int(round(left))))
+            top = max(0, min(page_h - text_h, int(round(top))))
+            if (abs(left - center_left) > shift_x or abs(top - center_top) > shift_y
+                    or left >= x2 or left + text_w <= x1
+                    or top >= y2 or top + text_h <= y1):
+                continue
+            local.add((left, top))
+        placements = []
+        for left, top in sorted(local, key=lambda position: (
+                (position[0] - center_left) ** 2 + (position[1] - center_top) ** 2,
+                position[1], position[0])):
+            bounds = (left, top, left + text_w, top + text_h)
+            if any(bounds[0] < other[2] + gap and bounds[2] > other[0] - gap
+                   and bounds[1] < other[3] + gap and bounds[3] > other[1] - gap
+                   for other in obstacles):
+                continue
+            movement = (left - center_left) ** 2 + (top - center_top) ** 2
+            placements.append((bounds, movement))
+        return placements
+
+    def _plan_layouts(self, entries, image_size, draw, page_scale, font_scale, stroke_enabled):
+        choices = {}
+        for index, (bubble_id, text, box) in enumerate(entries):
+            try:
+                choices[index] = self._readable_layout(
+                    text, box, image_size, draw, page_scale, font_scale,
+                    stroke_enabled, [], position_guides=[entry[2] for other_index, entry in enumerate(entries)
+                                                        if other_index != index],
+                    all_candidates=True,
+                )
+            except TypesettingError as exc:
+                raise TypesettingError(f"Bubble #{bubble_id}: {exc}") from exc
+
+        def collides(first, second):
+            a, b = first[4], second[4]
+            gap = max(2, round(max(first[0].size, second[0].size) * 0.20))
+            return (a[0] < b[2] + gap and a[2] > b[0] - gap
+                    and a[1] < b[3] + gap and a[3] > b[1] - gap)
+
+        # Plan before painting. Revisit earlier choices when a later dialogue
+        # is blocked instead of aborting after committing a greedy placement.
+        planned = {}
+        remaining_budget = 4000
+        blocked_index = 0
+
+        def search(remaining):
+            nonlocal remaining_budget, blocked_index
+            if not remaining:
+                return True
+            if remaining_budget <= 0:
+                return False
+            index = min(remaining, key=lambda key: (len(remaining[key]), key))
+            blocked_index = index
+            for candidate in remaining[index]:
+                if remaining_budget <= 0:
+                    break
+                remaining_budget -= 1
+                filtered = {key: [option for option in options if not collides(candidate, option)]
+                            for key, options in remaining.items() if key != index}
+                if any(not options for options in filtered.values()):
+                    continue
+                planned[index] = candidate
+                if search(filtered):
+                    return True
+                planned.pop(index, None)
+                if remaining_budget <= 0:
+                    break
+            return False
+
+        if search(choices):
+            return [planned[index] for index in range(len(entries))]
+        bubble_id, _, box = entries[blocked_index]
+        reason = "search limit reached" if remaining_budget <= 0 else "local layout candidates conflict"
+        raise TypesettingError(
+            f"Cannot place all {len(entries)} dialogues without overlap: {reason}; "
+            f"bubble #{bubble_id}, anchor {box}. No partial image was rendered."
+        )
+
+    @staticmethod
+    def _normalize_render_text(text: str) -> str:
+        # The comic font lacks CJK punctuation and full-width Latin glyphs.
+        # Keep the translation itself unchanged; use equivalent render glyphs.
+        text = unicodedata.normalize("NFKC", text)
+        return text.translate(str.maketrans({
+            "\u3010": "[", "\u3011": "]", "\u3014": "[", "\u3015": "]",
+            "\u300c": '"', "\u300d": '"', "\u300e": '"', "\u300f": '"',
+            "\u3008": "<", "\u3009": ">", "\u300a": "<<", "\u300b": ">>",
+            "\u3001": ",", "\u3002": ".", "\u200b": "", "\ufeff": "",
+        }))
 
     def typeset(
         self,
@@ -211,13 +442,13 @@ class MangaTypesettingService:
         if not bubbles or image.width == 0 or image.height == 0:
             return image
 
-        output_img = image.copy()
-        overlay = Image.new("RGBA", output_img.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
+        if not math.isfinite(font_scale) or font_scale <= 0:
+            raise TypesettingError("Font scale must be a finite number greater than zero.")
 
-        page_scale = max(0.5, min(output_img.width / 900.0, output_img.height / 1200.0))
-        MIN_FONT_SIZE = 12
-        hard_min_font = max(MIN_FONT_SIZE, int(round(14 * page_scale * font_scale)))
+        output_img = to_rgb_image(image).copy()
+        # A short page strip uses the same text scale as a full-width page.
+        page_scale = max(0.5, output_img.width / 900.0)
+        entries = []
 
         for bubble in bubbles:
             text = bubble.translation or bubble.text
@@ -226,92 +457,34 @@ class MangaTypesettingService:
 
             if self.all_caps:
                 text = text.upper()
-
-            words = text.strip().split()
-            bb = bubble.bounding_box
-            lb = bubble.layout_box
-            tb = bubble.text_box
-
-            if bb:
-                center_x = bb.x + bb.width / 2.0
-                center_y = bb.y + bb.height / 2.0
-                bubble_w = int(bb.width * 0.88)
-                bubble_h = int(bb.height * 0.90)
-            else:
-                fallback_box = lb or tb
-                if fallback_box:
-                    center_x = fallback_box.x + fallback_box.width / 2.0
-                    center_y = fallback_box.y + fallback_box.height / 2.0
-                else:
-                    center_x = output_img.width / 2.0
-                    center_y = output_img.height / 2.0
-                bubble_w = 0
-                bubble_h = 0
-
-            box_w = int(lb.width * 0.95) if lb else (int(tb.width * 0.95) if tb else 0)
-            box_h = int(lb.height * 0.95) if lb else (int(tb.height * 0.95) if tb else 0)
-
-            avail_w = max(24, max(box_w, bubble_w))
-            avail_h = max(24, max(box_h, bubble_h))
-
-            if avail_h > avail_w * 1.3:
-                avail_w = max(avail_w, min(int(max(avail_w * 1.25, avail_h * 0.50)), output_img.width - 32))
-
-            font, lines, line_heights, spacing = self.find_optimal_font_and_lines(
-                text=text,
-                target_w=avail_w,
-                target_h=avail_h,
-                draw=draw,
-                page_scale=page_scale,
-                font_scale=font_scale,
-                min_font_size=hard_min_font
-            )
-
-            stroke_width = max(2, int(round(font.size * 0.08))) if stroke_color else 0
-            text_w, text_h, _ = self._measure_text_block(lines, font, draw, stroke_width=stroke_width)
-
-            if text_w > avail_w or text_h > avail_h:
-                f_try = self._get_font(hard_min_font)
-                sw_t = max(2, int(round(f_try.size * 0.08))) if stroke_color else 0
-                max_w = max(
-                    draw.textbbox((0, 0), w_item, font=f_try, stroke_width=sw_t)[2] -
-                    draw.textbbox((0, 0), w_item, font=f_try, stroke_width=sw_t)[0]
-                    for w_item in words
-                )
-                needed_w = max(avail_w, max_w + 14)
-                exp_w = min(output_img.width - 32, max(needed_w, int(avail_w * 1.20)))
-                exp_h = min(output_img.height - 32, max(avail_h, int(avail_h * 1.25)))
-
-                font_exp, lines_exp, heights_exp, sp_exp = self.find_optimal_font_and_lines(
-                    text=text,
-                    target_w=exp_w,
-                    target_h=exp_h,
-                    draw=draw,
-                    page_scale=page_scale,
-                    font_scale=font_scale,
-                    min_font_size=hard_min_font
-                )
-                sw_exp = max(2, int(round(font_exp.size * 0.08))) if stroke_color else 0
-                tw_exp, th_exp, _ = self._measure_text_block(lines_exp, font_exp, draw, stroke_width=sw_exp)
-
-                font, lines, line_heights, spacing = font_exp, lines_exp, heights_exp, sp_exp
-                stroke_width = sw_exp
-                text_w, text_h = tw_exp, th_exp
-
-            if not lines:
+            text = self._normalize_render_text(text)
+            if not text.strip():
                 continue
 
-            box_x = int(round(center_x - text_w / 2.0))
-            box_y = int(round(center_y - text_h / 2.0))
+            # Keep overflow attached to the original dialogue. An estimated
+            # empty balloon/layout rectangle can extend toward another bubble.
+            box = bubble.text_box or bubble.layout_box or bubble.bounding_box
+            x1, y1 = max(0, box.x), max(0, box.y)
+            x2, y2 = min(output_img.width, box.right), min(output_img.height, box.bottom)
+            if x2 <= x1 or y2 <= y1:
+                raise TypesettingError(f"Bubble #{bubble.id}: safe area is outside the image.")
 
-            box_x = max(4, min(box_x, output_img.width - text_w - 4))
-            box_y = max(4, min(box_y, output_img.height - text_h - 4))
+            entries.append((bubble.id, text, (x1, y1, x2, y2)))
 
-            cur_y = box_y
+        layouts = self._plan_layouts(entries, output_img.size, ImageDraw.Draw(output_img),
+                                     page_scale, font_scale, stroke_color is not None)
+        for font, lines, line_heights, spacing, bounds in layouts:
+
+            stroke_width = max(2, int(round(font.size * 0.08))) if stroke_color is not None else 0
+            left, top, right, bottom = bounds
+            text_w, text_h = right - left, bottom - top
+            overlay = Image.new("RGBA", (text_w, text_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(overlay)
+            cur_y = 0
             for i, line in enumerate(lines):
                 line_bbox = draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width)
                 lw = line_bbox[2] - line_bbox[0]
-                line_x = box_x + (text_w - lw) / 2.0 - line_bbox[0]
+                line_x = (text_w - lw) / 2.0 - line_bbox[0]
                 line_y = cur_y - line_bbox[1]
 
                 draw.text(
@@ -324,25 +497,6 @@ class MangaTypesettingService:
                 )
                 cur_y += line_heights[i] + spacing
 
-        ov_arr = np.array(overlay)
-        has_alpha = ov_arr[:, :, 3] > 0
-        if np.any(has_alpha):
-            bg_arr = np.array(output_img)
-            if text_color == (0, 0, 0) and stroke_color == (255, 255, 255):
-                is_text = (ov_arr[:, :, 0] < 100) & has_alpha
-                is_stroke = (ov_arr[:, :, 0] >= 100) & has_alpha
-                dest_gray = (
-                    0.299 * bg_arr[:, :, 0] + 0.587 * bg_arr[:, :, 1] + 0.114 * bg_arr[:, :, 2]
-                )
-                is_dark_line = dest_gray < 75
-                apply_stroke = is_stroke & (~is_dark_line)
-
-                for c in range(3):
-                    bg_arr[:, :, c] = np.where(apply_stroke, ov_arr[:, :, c], bg_arr[:, :, c])
-                    bg_arr[:, :, c] = np.where(is_text, ov_arr[:, :, c], bg_arr[:, :, c])
-
-                output_img = Image.fromarray(bg_arr)
-            else:
-                output_img.paste(overlay, (0, 0), overlay)
-
+            # Alpha compositing keeps the white outline visible on dark balloons.
+            output_img.paste(overlay, (left, top), overlay)
         return output_img

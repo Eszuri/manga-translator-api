@@ -51,11 +51,11 @@ const MangaTranslationCache = {
     const source = this.normalizeUrlForKey(originalSrc, true);
 
     if (source && (source.startsWith('http://') || source.startsWith('https://'))) {
-      return `v8_${JSON.stringify([lang, translator, direction, fontScale, allCaps, apiUrl, source])}`;
+      return `v13_${JSON.stringify([lang, translator, direction, fontScale, allCaps, apiUrl, source])}`;
     }
 
     const page = this.normalizeUrlForKey(pageUrl, false);
-    return `v8_fallback_${JSON.stringify([lang, translator, direction, fontScale, allCaps, apiUrl, page, imageIndex, source])}`;
+    return `v13_fallback_${JSON.stringify([lang, translator, direction, fontScale, allCaps, apiUrl, page, imageIndex, source])}`;
   },
 
   async getCachedTranslation(cacheKey) {
