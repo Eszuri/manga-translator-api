@@ -22,7 +22,10 @@ from app.services.ocr_service import get_ocr_service
 from app.services.translation_service import get_translation_service
 from app.services.translation_filters import is_graphic_text, usable_translation
 from app.services.inpainting_service import MangaInpaintingService
+import logging
 from app.services.typesetting_service import MangaTypesettingService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -106,6 +109,8 @@ async def translate_dialogues(request: TranslateDialoguesRequest):
     trans_service = get_translation_service()
 
     dialogue_dicts = [{"id": d.id, "text": d.text} for d in request.dialogues]
+    engine_label = f"llm ({trans_service.model})" if trans_service.model else "llm"
+    logger.info("[Translate] Engine: %s | Lang: %s | Bubbles: %d", engine_label, request.target_lang, len(dialogue_dicts))
     translations_map = await trans_service._call_llm_async(dialogue_dicts, target_lang=request.target_lang)
 
     items = []
@@ -119,6 +124,8 @@ async def translate_dialogues(request: TranslateDialoguesRequest):
         )
 
     duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+    elapsed = duration_ms / 1000.0
+    logger.info("[Translate] Done: llm -> %s (%d bubbles in %.2fs)", request.target_lang, len(items), elapsed)
 
     return TranslateDialoguesResponse(
         success=True,

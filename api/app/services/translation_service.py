@@ -2,6 +2,7 @@ import asyncio
 import re
 import json
 import logging
+import time
 import unicodedata
 from urllib.parse import urlsplit
 from typing import Dict, List, Optional, Tuple, Any
@@ -244,16 +245,25 @@ class MangaTranslationService:
         if not dialogue_items:
             return bubbles
 
+        start_time = time.perf_counter()
+        engine_label = f"llm ({self.model})" if translator != "google" and self.model else translator
+        logger.info("[Translate] Engine: %s | Lang: %s | Bubbles: %d", engine_label, target_lang, len(dialogue_items))
+
+        final_engine = translator
         if translator == "google":
             translations_map = await self._call_google_async(dialogue_items, target_lang=target_lang)
         else:
             try:
                 translations_map = await self._call_llm_async(dialogue_items, target_lang=target_lang)
             except Exception as e:
-                logger.warning("LLM translation failed (%s), falling back to Google Translate", e)
+                err_msg = str(e).strip() or type(e).__name__
+                logger.warning("[Translate] Fallback -> google | Lang: %s (Reason: %s)", target_lang, err_msg)
+                final_engine = "google"
                 translations_map = await self._call_google_async(dialogue_items, target_lang=target_lang)
 
-        validated = validate_translations(dialogue_items, translations_map, "Google Translate" if translator == "google" else "LLM")
+        validated = validate_translations(dialogue_items, translations_map, "Google Translate" if final_engine == "google" else "LLM")
+        elapsed = time.perf_counter() - start_time
+        logger.info("[Translate] Done: %s -> %s (%d bubbles in %.2fs)", final_engine, target_lang, len(validated), elapsed)
 
         for b in bubbles:
             if b.id in validated:

@@ -281,6 +281,20 @@ def build_extension_package_sync(log_func=None) -> bool:
         EXTENSION_BUILD_DONE.set()
 
 
+def format_log_line(prefix: str, text: str) -> str:
+    if "[Translate]" in text:
+        idx = text.find("[Translate]")
+        payload = text[idx + len("[Translate]"):].strip()
+        if payload.startswith("Fallback"):
+            tag = "[bold yellow][Translate][/bold yellow]"
+        elif payload.startswith("Done"):
+            tag = "[bold green][Translate][/bold green]"
+        else:
+            tag = "[bold cyan][Translate][/bold cyan]"
+        return f"{prefix} {tag} {payload}"
+    return f"{prefix} {text}"
+
+
 class MangaTranslatorTUI(App):
 
     TITLE = "Manga Translator"
@@ -447,7 +461,7 @@ class MangaTranslatorTUI(App):
                 if not line:
                     break
                 text = line.decode("utf-8", errors="replace").rstrip()
-                self.query_one("#terminal-log", RichLog).write(f"[dim][SRV][/dim] {text}")
+                self.query_one("#terminal-log", RichLog).write(format_log_line("[dim][SRV][/dim]", text))
 
             if proc and proc.returncode is None:
                 try:
@@ -540,7 +554,7 @@ class MangaTranslatorTUI(App):
                 if not line:
                     break
                 text = line.decode("utf-8", errors="replace").rstrip()
-                self.query_one("#terminal-log", RichLog).write(f"[cyan][IMG][/cyan] {text}")
+                self.query_one("#terminal-log", RichLog).write(format_log_line("[cyan][IMG][/cyan]", text))
 
             if proc and proc.returncode is None:
                 try:

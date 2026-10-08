@@ -14,6 +14,14 @@ from app.api.v1.router import api_router
 from app.services.translation_service import TranslationError
 from app.services.typesetting_service import TypesettingError
 
+app_logger = logging.getLogger("app")
+app_logger.setLevel(logging.INFO)
+if not app_logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(message)s"))
+    app_logger.addHandler(_handler)
+    app_logger.propagate = False
+
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
