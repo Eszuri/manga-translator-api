@@ -64,6 +64,7 @@ class MangaTranslator {
         apiUrl: 'http://127.0.0.1:8000',
         targetLang: 'id',
         translator: 'google',
+        llmMergeOcr: true,
         readingDirection: 'rtl',
         fontScale: 1.0,
         allCaps: true,
@@ -1037,6 +1038,7 @@ class MangaTranslator {
             originalHeight: job.originalHeight,
             targetLang: settings.targetLang,
             translator: settings.translator,
+            llmMergeOcr: settings.llmMergeOcr !== false,
             readingDirection: settings.readingDirection,
             timestamp: Date.now()
           }).catch(err => console.warn('[MangaTranslator] Failed to cache translation:', err));
@@ -1104,6 +1106,7 @@ class MangaTranslator {
         mimeType: 'image/jpeg',
         target_lang: settings.targetLang,
         translator: settings.translator || 'llm',
+        llm_merge_ocr: String(settings.llmMergeOcr !== false),
         reading_direction: settings.readingDirection,
         typeset: 'true',
         font_scale: String(settings.fontScale),
@@ -1278,6 +1281,7 @@ class MangaTranslator {
         originalHeight,
         targetLang: settings.targetLang,
         translator: settings.translator,
+        llmMergeOcr: settings.llmMergeOcr !== false,
         readingDirection: settings.readingDirection,
         timestamp: Date.now()
       }).catch(() => {});

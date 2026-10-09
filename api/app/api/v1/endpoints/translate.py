@@ -79,6 +79,7 @@ def encode_image(image):
 
 @router.post("/page", response_model=DetectBubblesResponse)
 async def translate_manga_page(
+    llm_merge_ocr: bool = Form(True, description="Combine page OCR for LLM translation; false translates each bubble separately"),
     file: UploadFile = File(..., description="Manga page image file (JPEG, PNG, WebP)"),
     source: str = Form("", max_length=8192),
     target_lang: str = Form(
@@ -103,7 +104,7 @@ async def translate_manga_page(
     candidates = [b for b in ordered_bubbles if (b.text or "").strip() and not is_graphic_text(b.text)]
     if candidates:
         trans_service = get_translation_service()
-        await trans_service.translate_bubbles_async(candidates, target_lang=target_lang)
+        await trans_service.translate_bubbles_async(candidates, target_lang=target_lang, llm_merge_ocr=llm_merge_ocr)
 
     duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
@@ -127,7 +128,7 @@ async def translate_dialogues(request: TranslateDialoguesRequest):
     dialogue_dicts = [{"id": d.id, "text": d.text} for d in request.dialogues]
     engine_label = f"llm ({trans_service.model})" if trans_service.model else "llm"
     logger.info("[Translate] Engine: %s | Lang: %s | Bubbles: %d", engine_label, request.target_lang, len(dialogue_dicts))
-    translations_map = await trans_service._call_llm_async(dialogue_dicts, target_lang=request.target_lang)
+    translations_map = await trans_service._call_llm_async(dialogue_dicts, target_lang=request.target_lang, llm_merge_ocr=request.llm_merge_ocr)
 
     items = []
     for d in request.dialogues:
@@ -154,6 +155,7 @@ async def translate_dialogues(request: TranslateDialoguesRequest):
 
 @router.post("/inpaint-page")
 async def inpaint_and_translate_manga_page(
+    llm_merge_ocr: bool = Form(True, description="Combine page OCR for LLM translation; ignored for Google Translate"),
     file: UploadFile = File(..., description="Manga page image file (JPEG, PNG, WebP)"),
     source: str = Form("", max_length=8192),
     target_lang: str = Form(
@@ -204,7 +206,7 @@ async def inpaint_and_translate_manga_page(
         if candidates:
             trans_service = get_translation_service()
             await trans_service.translate_bubbles_async(
-                candidates, target_lang=target_lang, translator=translator
+                candidates, target_lang=target_lang, translator=translator, llm_merge_ocr=llm_merge_ocr
             )
             active_bubbles = [b for b in candidates if usable_translation(b.translation or "")]
 
@@ -264,6 +266,7 @@ async def cancel_translation_job(
 
 @router.post("/inpaint-stream")
 async def inpaint_stream_manga_page(
+    llm_merge_ocr: bool = Form(True, description="Combine page OCR for LLM translation; ignored for Google Translate"),
     source: str = Form("", max_length=8192),
     job_id: str | None = Form(None, min_length=1, max_length=128, pattern=JOB_ID_PATTERN),
     file: UploadFile = File(..., description="Manga page image file (JPEG, PNG, WebP)"),
@@ -336,7 +339,7 @@ async def inpaint_stream_manga_page(
                     trans_service = get_translation_service()
                     await job.run_async(
                         trans_service.translate_bubbles_async,
-                        candidates, target_lang=target_lang, translator=translator,
+                        candidates, target_lang=target_lang, translator=translator, llm_merge_ocr=llm_merge_ocr,
                     )
                     active_bubbles = [b for b in candidates if usable_translation(b.translation or "")]
                 else:

@@ -7,6 +7,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const siteToggle = document.getElementById('siteToggle');
 
   const translator = document.getElementById('translator');
+  const llmOcrMode = document.getElementById('llmOcrMode');
+  const llmOcrModeRow = document.getElementById('llmOcrModeRow');
   const targetLang = document.getElementById('targetLang');
   const readingDirection = document.getElementById('readingDirection');
   const loadingStyle = document.getElementById('loadingStyle');
@@ -72,7 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  [translator, targetLang, readingDirection, loadingStyle, apiUrl].forEach(el => {
+  [translator, llmOcrMode, targetLang, readingDirection, loadingStyle, apiUrl].forEach(el => {
     el.addEventListener('change', saveSettings);
   });
 
@@ -136,22 +138,27 @@ document.addEventListener('DOMContentLoaded', () => {
       allCaps: true,
       autoTranslate: true,
       translator: 'google',
+      llmMergeOcr: true,
       loadingStyle: 'default'
     }, (items) => {
       apiUrl.value = items.apiUrl;
       targetLang.value = items.targetLang;
       readingDirection.value = items.readingDirection;
       translator.value = items.translator || 'google';
+      llmOcrMode.value = items.llmMergeOcr === false ? 'individual' : 'combined';
+      updateLlmOptions();
       loadingStyle.value = items.loadingStyle === 'minimal' ? 'minimal' : 'default';
     });
   }
 
   function saveSettings() {
+    updateLlmOptions();
     const newSettings = {
       apiUrl: apiUrl.value.trim() || 'http://127.0.0.1:8000',
       targetLang: targetLang.value,
       readingDirection: readingDirection.value,
       translator: translator.value,
+      llmMergeOcr: llmOcrMode.value === 'combined',
       loadingStyle: loadingStyle.value,
       translationMode: 'inpaint',
       autoTranslate: true
@@ -172,6 +179,14 @@ document.addEventListener('DOMContentLoaded', () => {
         serverStatusText.textContent = 'Online';
       }
     });
+  }
+
+  function updateLlmOptions() {
+    llmOcrModeRow.hidden = translator.value !== 'llm';
+    llmOcrMode.disabled = translator.value !== 'llm';
+    document.getElementById('llmOcrModeHint').textContent = llmOcrMode.value === 'combined'
+      ? 'Understands all dialogue in this image together, then translates each bubble.'
+      : 'Translates each bubble independently, without context from other bubbles.';
   }
 
   function loadStats() {

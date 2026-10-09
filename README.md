@@ -150,7 +150,7 @@ Selain melalui TUI, builder gambar dapat dijalankan langsung menggunakan perinta
 
 Edit file `api/.env`:
 
-LLM membaca seluruh OCR satu halaman bersama, menerjemahkan, lalu memeriksa makna dan pembagian teks per balon. Proses memakai dua panggilan LLM; respons tidak valid dapat diulang dalam batas waktu yang sama.
+Saat memilih LLM di extension, opsi **Translation Context** muncul: **All bubbles together** (default) memahami seluruh teks balon dalam satu gambar bersama, lalu menerjemahkan tiap balon dan memeriksa hasilnya; **Each bubble separately** menerjemahkan tiap balon tanpa konteks dari balon lain. Jumlah balon tidak menentukan mode. Opsi disembunyikan saat memilih Google Translate. Kedua mode LLM memakai prompt bahasa alami dan satu batas waktu per halaman termasuk retry.
 
 | Pengaturan | Fungsi |
 | --- | --- |

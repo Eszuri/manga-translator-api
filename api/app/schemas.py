@@ -81,6 +81,7 @@ class DialogueItem(BaseModel):
 
 
 class TranslateDialoguesRequest(BaseModel):
+    llm_merge_ocr: bool = Field(default=True, description="Combine all dialogue OCR; false translates each bubble separately")
     dialogues: List[DialogueItem] = Field(..., description="List of dialogues to translate in reading order")
     target_lang: str = Field(default="id", description="Target language code ('id' for Indonesian, 'en' for English)")
     context: Optional[str] = Field(default=None, description="Optional scene context or manga genre info")
@@ -109,4 +110,3 @@ class InpaintPageResponse(BaseModel):
     image_base64: str = Field(..., description="Base64-encoded clean or typeset manga image")
     bubbles: List[DetectedBubble] = Field(default_factory=list)
     processing_time_ms: float
-

@@ -170,6 +170,13 @@
       letter-spacing: 0.3px;
     }
 
+    .setting-hint {
+      margin-top: 5px;
+      color: var(--text-muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
     select, input[type="text"] {
       width: 100%;
       background: var(--card);
@@ -238,6 +245,15 @@
       <option value="google">Google Translate</option>
       <option value="llm">LLM API</option>
     </select>
+  </div>
+
+  <div class="setting-row" id="llmOcrModeRow" hidden>
+    <label class="setting-label" for="llmOcrMode">Translation Context</label>
+    <select id="llmOcrMode" aria-describedby="llmOcrModeHint">
+      <option value="combined">All bubbles together</option>
+      <option value="individual">Each bubble separately</option>
+    </select>
+    <p class="setting-hint" id="llmOcrModeHint"></p>
   </div>
 
   <div class="setting-row">

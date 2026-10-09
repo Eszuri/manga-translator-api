@@ -7,6 +7,7 @@ const DEFAULT_SETTINGS = {
   allCaps: true,
   autoTranslate: true,
   translator: 'google',
+  llmMergeOcr: true,
   loadingStyle: 'default',
   enabledDomains: []
 };
