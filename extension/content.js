@@ -295,7 +295,8 @@ class MangaTranslator {
     while (this.isEnabled && generation === this.operationGeneration) {
       if (!this.isEnabled || generation !== this.operationGeneration) return;
       const allImgs = this.getPageImages().filter(
-        img => this.canProcessImage(img) && (img.src || img.dataset.src || img.dataset.lazySrc)
+        img => this.canProcessImage(img) && !this.getImageExclusionReason(img) &&
+          (img.src || img.dataset.src || img.dataset.lazySrc)
       );
       if (allImgs.length === 0) break;
 
@@ -319,7 +320,48 @@ class MangaTranslator {
   }
 
   isMangaImage(img) {
-    return img.complete && this.isMangaDimensions(img.naturalWidth, img.naturalHeight);
+    return img.complete && this.isMangaDimensions(img.naturalWidth, img.naturalHeight) &&
+      !this.getImageExclusionReason(img);
+  }
+
+  getImageExclusionReason(img) {
+    if (img.complete && !this.isMangaDimensions(img.naturalWidth, img.naturalHeight)) {
+      return 'The original image must be at least 500 × 700 pixels.';
+    }
+
+    // Use layout size, not viewport intersection: full-size pages below the
+    // viewport still belong in the queue. Adapt to narrow/mobile readers.
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1024;
+    const minDisplayWidth = Math.min(280, viewportWidth * 0.6);
+    const width = img.clientWidth;
+    const height = img.clientHeight;
+    if (width > 0 && height > 0 && (width < minDisplayWidth || height < 200)) {
+      return 'The image is displayed too small and looks like a thumbnail.';
+    }
+    if (img.complete && (width <= 0 || height <= 0)) {
+      return 'The image is hidden or has no display area.';
+    }
+
+    // Inspect nearby image/card elements only; a page-wide sidebar/related
+    // container must not classify unrelated reader pages as thumbnails.
+    const marker = /(?:^|[^a-z0-9])(?:thumb(?:nail)?s?|covers?|posters?|avatars?|logos?|icons?|banners?|recommendations?|related|(?:manga|comic|series|book)[-_ ](?:card|cover|item))(?:$|[^a-z0-9])/i;
+    for (let element = img, depth = 0; element && depth < 4; element = element.parentElement, depth++) {
+      const identity = `${element.id || ''} ${element.getAttribute('class') || ''}`
+        .replace(/([a-z])([A-Z])/g, '$1-$2');
+      if (marker.test(identity)) return 'The image is marked as a thumbnail, cover, or recommendation.';
+    }
+
+    for (const source of [img.currentSrc, img.getAttribute('src'), img.dataset.src,
+      img.dataset.lazySrc, img.dataset.original, img.dataset.url, img.dataset.highres]) {
+      if (!source || /^(?:data|blob):/i.test(source)) continue;
+      try {
+        const path = decodeURIComponent(new URL(source, window.location.href).pathname);
+        if (/(?:^|\/)(?:thumb(?:nail)?s?|covers?|posters?|avatars?|logos?|icons?|banners?)(?:\/|[_.-]|$)/i.test(path)) {
+          return 'The image URL identifies a thumbnail, cover, or decorative image.';
+        }
+      } catch {}
+    }
+    return '';
   }
 
   getMangaDimensionThreshold() {
@@ -572,7 +614,7 @@ class MangaTranslator {
     const descriptors = this.getPageImages()
       .map(img => this.getImageCacheDescriptor(img, settings))
       .filter(({ img, originalSrc }) =>
-        candidates.has(img) && this.canProcessImage(img) && Boolean(originalSrc)
+        candidates.has(img) && this.canProcessImage(img) && !this.getImageExclusionReason(img) && Boolean(originalSrc)
       );
 
     if (descriptors.length === 0) return 0;
@@ -588,6 +630,8 @@ class MangaTranslator {
       if (!this.isImageSourceCurrent(descriptor) || !this.canProcessImage(descriptor.img)) continue;
       const cached = cachedEntries.get(descriptor.cacheKey);
       if (!cached) continue;
+      if (this.getImageExclusionReason(descriptor.img) ||
+          !this.isMangaDimensions(cached.originalWidth, cached.originalHeight)) continue;
       if (this.hasResponsiveImageSource(descriptor.img)) {
         try {
           await this.waitForImageReady(descriptor.img);
@@ -598,6 +642,7 @@ class MangaTranslator {
         if (!this.isImageSourceCurrent(descriptor) || !this.canProcessImage(descriptor.img)) continue;
       }
 
+      if (this.getImageExclusionReason(descriptor.img)) continue;
       const imageUrl = cache.createImageUrl(cached);
       if (!imageUrl) continue;
 
@@ -717,7 +762,7 @@ class MangaTranslator {
     while (this.processingQueue.length > 0) {
       const img = this.processingQueue.shift();
       this.setQueuedState(img, false);
-      if (!img.isConnected) {
+      if (!img.isConnected || !this.isMangaImage(img)) {
         this.pendingImages.delete(img);
         continue;
       }
@@ -750,7 +795,7 @@ class MangaTranslator {
     const generation = this.operationGeneration;
     const jobId = this.createJobId();
     const settings = { ...(this.settings || await this.loadSettings()) };
-    if (!this.isEnabled || generation !== this.operationGeneration || !img.isConnected) return;
+    if (!this.isEnabled || generation !== this.operationGeneration || !img.isConnected || !this.isMangaImage(img)) return;
     const descriptor = this.getImageCacheDescriptor(img, settings);
     const originalSrc = descriptor.originalSrc;
     const job = {
@@ -1100,6 +1145,9 @@ class MangaTranslator {
     if (!img || !jobId || !requestSettings || this.contextMenuLoadingSources.has(jobId)) {
       return { success: false, error: 'The image or translation request is no longer available.' };
     }
+    const excluded = this.getImageExclusionReason(img);
+    if (excluded) return { success: false, error: excluded };
+    if (!img.complete) return { success: false, error: 'Wait for the original image to finish loading.' };
     const settings = { ...requestSettings };
     const descriptor = this.getImageCacheDescriptor(img, settings);
     this.contextMenuLoadingSources.set(jobId, {
