@@ -64,7 +64,7 @@ class Settings(BaseModel):
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
     LLM_BASE_URL: str = llm_base_url()
     LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
-    LLM_TIMEOUT_SECONDS: float = Field(default=float(os.getenv("LLM_TIMEOUT_SECONDS", "30.0")), gt=0, allow_inf_nan=False)
+    LLM_TIMEOUT_SECONDS: float = Field(default=float(os.getenv("LLM_TIMEOUT_SECONDS", "90.0")), gt=0, allow_inf_nan=False)
     DEFAULT_TRANSLATOR: Literal["google", "llm"] = os.getenv("DEFAULT_TRANSLATOR", "llm")
 
     model_config = {"validate_default": True}

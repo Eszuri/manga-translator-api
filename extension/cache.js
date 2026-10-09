@@ -44,6 +44,7 @@ const MangaTranslationCache = {
   buildCacheKey(settings, originalSrc, pageUrl = window.location.href, imageIndex = -1) {
     const lang = (settings && settings.targetLang) || 'id';
     const translator = (settings && settings.translator) || 'google';
+    const revision = translator === 'llm' ? 'v19' : 'v18';
     const direction = (settings && settings.readingDirection) || 'rtl';
     const fontScale = (settings && settings.fontScale) ?? 1.0;
     const allCaps = (settings && settings.allCaps) ?? true;
@@ -51,11 +52,11 @@ const MangaTranslationCache = {
     const source = this.normalizeUrlForKey(originalSrc, true);
 
     if (source && (source.startsWith('http://') || source.startsWith('https://'))) {
-      return `v18_${JSON.stringify([lang, translator, direction, fontScale, allCaps, apiUrl, source])}`;
+      return `${revision}_${JSON.stringify([lang, translator, direction, fontScale, allCaps, apiUrl, source])}`;
     }
 
     const page = this.normalizeUrlForKey(pageUrl, false);
-    return `v18_fallback_${JSON.stringify([lang, translator, direction, fontScale, allCaps, apiUrl, page, imageIndex, source])}`;
+    return `${revision}_fallback_${JSON.stringify([lang, translator, direction, fontScale, allCaps, apiUrl, page, imageIndex, source])}`;
   },
 
   async getCachedTranslation(cacheKey) {

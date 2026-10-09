@@ -141,6 +141,7 @@ Selain melalui TUI, builder gambar dapat dijalankan langsung menggunakan perinta
 | `--image` | String | *(semua)* | Memproses satu nama file tertentu saja (contoh: `009.jpg`) |
 | `--limit` | Integer | `0` | Batas jumlah halaman yang diproses (`0` = proses semua halaman) |
 | `--target-lang` | `id`, `en` | `id` | Bahasa target terjemahan (`id` = Indonesia, `en` = Inggris) |
+| `--translator` | `google`, `llm` | `google` | Mesin penerjemah; `llm` memakai konfigurasi `api/.env` |
 | `--font-scale` | Float | `1.0` | Pengali ukuran font teks pada hasil akhir render |
 
 > **Catatan:** Komputasi perangkat otomatis di-hardcode ke **GPU** dan deteksi balon teks otomatis menggunakan model **Hybrid** (Comic Text Detector + Segmentasi Balon).
@@ -148,6 +149,8 @@ Selain melalui TUI, builder gambar dapat dijalankan langsung menggunakan perinta
 ## Pengaturan API
 
 Edit file `api/.env`:
+
+LLM membaca seluruh OCR satu halaman bersama, menerjemahkan, lalu memeriksa makna dan pembagian teks per balon. Proses memakai dua panggilan LLM; respons tidak valid dapat diulang dalam batas waktu yang sama.
 
 | Pengaturan | Fungsi |
 | --- | --- |
@@ -157,7 +160,7 @@ Edit file `api/.env`:
 | `LLM_API_KEY` | Kunci API layanan LLM; kosongkan jika menggunakan Google Translate atau Ollama lokal |
 | `LLM_BASE_URL` | Alamat endpoint LLM, misalnya `http://127.0.0.1:11434/v1` untuk Ollama pada PC yang sama |
 | `LLM_MODEL` | Model ID yang digunakan, contoh: `qwen2.5:3b` atau `gpt-4o-mini` |
-| `LLM_TIMEOUT_SECONDS` | Batas waktu tunggu respons LLM dalam detik (default: `30.0`) |
+| `LLM_TIMEOUT_SECONDS` | Batas waktu total terjemahan dan pemeriksaan LLM per halaman, termasuk retry (default: `90.0` detik) |
 | `DEFAULT_TRANSLATOR` | Penerjemah bawaan: `google` atau `llm` |
 
 Contoh Ollama lokal:

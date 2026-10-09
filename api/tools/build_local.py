@@ -44,6 +44,7 @@ def parse_args():
     parser.add_argument("--image", help="One input filename, e.g. 009.jpg")
     parser.add_argument("--limit", type=int, default=0, help="Pages to process; 0 means all")
     parser.add_argument("--target-lang", choices=("id", "en"), default="id")
+    parser.add_argument("--translator", choices=("google", "llm"), default="google")
     parser.add_argument("--font-scale", type=float, default=1.0)
     return parser.parse_args()
 
@@ -176,10 +177,10 @@ def process_page(path: Path, output_dir: Path, detector, ocr, translator,
     candidates = [b for b in bubbles if (b.text or "").strip() and not is_graphic_text(b.text)]
     if candidates:
         asyncio.run(translator.translate_bubbles_async(
-            candidates, target_lang=args.target_lang, translator="google"
+            candidates, target_lang=args.target_lang, translator=args.translator
         ))
     timings["translate_ms"] = round((time.perf_counter() - start) * 1000)
-    transcript_image(image, bubbles, f"Google Translate - {args.target_lang}", True).save(outputs["translate"])
+    transcript_image(image, bubbles, f"{args.translator.upper()} - {args.target_lang}", True).save(outputs["translate"])
 
     active = [b for b in candidates if usable_translation(b.translation or "")]
     start = time.perf_counter()
@@ -202,7 +203,7 @@ def main() -> int:
     for folder in STAGE_FOLDERS.values():
         (output_dir / folder).mkdir(parents=True, exist_ok=True)
 
-    print(f"Pages: {len(images)} | device: gpu | translation: Google")
+    print(f"Pages: {len(images)} | device: gpu | translation: {args.translator.upper()}")
     print(f"Output: {output_dir}")
     detector = make_detector()
     ocr = MangaOcrService()
