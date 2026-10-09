@@ -139,13 +139,13 @@ class ComicTextDetector(BaseBubbleDetector):
         resized = cv2.resize(cropped, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
         return resized
 
-    def detect(self, image: Image.Image, refine: bool = True) -> List[DetectedBubble]:
+    def _detect_single(self, image: Image.Image):
         orig_w, orig_h = image.size
         if orig_w == 0 or orig_h == 0:
-            return []
+            return [], None
 
         blk, seg, _, r, (dw, dh) = self.detect_raw(image)
-        self._latest_segmentation = (image, self.get_unletterboxed_seg(seg, orig_w, orig_h, dw, dh))
+        segmentation = self.get_unletterboxed_seg(seg, orig_w, orig_h, dw, dh)
         preds = blk[0]
 
         cx = preds[:, 0]
@@ -161,7 +161,7 @@ class ComicTextDetector(BaseBubbleDetector):
 
         valid_mask = scores > self.conf_threshold
         if not np.any(valid_mask):
-            return []
+            return [], segmentation
 
         candidate_indices = np.where(valid_mask)[0]
         cx_v = cx[candidate_indices]
@@ -189,7 +189,7 @@ class ComicTextDetector(BaseBubbleDetector):
         )
 
         if len(selected_indices) == 0:
-            return []
+            return [], segmentation
 
         detected_list: List[DetectedBubble] = []
 
@@ -222,9 +222,56 @@ class ComicTextDetector(BaseBubbleDetector):
             )
             detected_list.append(bubble)
 
+        return detected_list, segmentation
+
+    @staticmethod
+    def _tile_origins(length: int, size: int = 1280, overlap: int = 256):
+        if length <= size:
+            return [0]
+        origins = list(range(0, length - size + 1, size - overlap))
+        if origins[-1] != length - size:
+            origins.append(length - size)
+        return origins
+
+    def detect(self, image: Image.Image, refine: bool = True) -> List[DetectedBubble]:
+        if not image.width or not image.height:
+            return []
+        detected_list, segmentation = self._detect_single(image)
+        # Preserve the full-page pass for large captions; overlapping GPU tile
+        # passes recover small text otherwise reduced to a few input pixels.
+        tile_size = min(1280, max(512, min(image.size) * 2))
+        if max(image.size) > min(1536, tile_size * 1.5):
+            for top in self._tile_origins(image.height, size=tile_size):
+                for left in self._tile_origins(image.width, size=tile_size):
+                    right, bottom = min(image.width, left + tile_size), min(image.height, top + tile_size)
+                    tile = image.crop((left, top, right, bottom))
+                    boxes, tile_seg = self._detect_single(tile)
+                    np.maximum(segmentation[top:bottom, left:right], tile_seg,
+                               out=segmentation[top:bottom, left:right])
+                    for bubble in boxes:
+                        box = bubble.text_box
+                        # Partial words at an internal seam must be detected
+                        # by the neighbouring overlapping tile instead.
+                        if ((left > 0 and box.x < 8) or (top > 0 and box.y < 8)
+                                or (right < image.width and box.right > tile.width - 8)
+                                or (bottom < image.height and box.bottom > tile.height - 8)):
+                            continue
+                        shifted = BoundingBox(x=left + box.x, y=top + box.y,
+                                              width=box.width, height=box.height)
+                        detected_list.append(bubble.model_copy(update={
+                            'bounding_box': shifted, 'text_box': shifted,
+                        }))
+            if detected_list:
+                selected = cv2.dnn.NMSBoxes(
+                    [[b.text_box.x, b.text_box.y, b.text_box.width, b.text_box.height]
+                     for b in detected_list],
+                    [b.confidence for b in detected_list],
+                    self.conf_threshold, self.nms_threshold,
+                )
+                detected_list = [detected_list[int(index)] for index in np.asarray(selected).reshape(-1)]
+        self._latest_segmentation = (image, segmentation)
         if not refine:
             return sort_manga_reading_order(detected_list, reading_direction='rtl')
-        segmentation = self._latest_segmentation[1]
         gray = np.array(image.convert('L'))
         refined = []
         for bubble in detected_list:

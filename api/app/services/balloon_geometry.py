@@ -41,6 +41,14 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
     patch = gray[text.y:text.bottom, text.x:text.right]
     support = ((segmentation[text.y:text.bottom, text.x:text.right] > 0.3)
                & (patch < 180)).astype(np.uint8)
+    # Refinement may tighten a detector box only when the segmentation covers
+    # its ink reliably. A missed short column must not disappear from the OCR
+    # crop just because the other, longer column has a strong mask.
+    original_ink = gray[original.y:original.bottom, original.x:original.right] < 180
+    original_support = segmentation[original.y:original.bottom, original.x:original.right] > 0.3
+    ink_count = np.count_nonzero(original_ink)
+    if ink_count and np.count_nonzero(original_ink & original_support) < ink_count * 0.75:
+        return [original]
     if np.count_nonzero(support) < 12:
         return [original]
     count, labels, stats, _ = cv2.connectedComponentsWithStats(support, connectivity=8)
@@ -217,15 +225,16 @@ class BalloonRegions:
         self.h, self.w = gray.shape
         self.text_boxes = text_boxes or []
         self.levels = []
+        local_scale = min(max(gray.shape), min(gray.shape) * 2)
         ink = (gray <= white_threshold).astype(np.uint8)
         for text in text_boxes or []:
             box = clip_box(text, self.w, self.h)
             if box is not None:
-                pad = max(2, round(max(self.w, self.h) * 0.002))
+                pad = max(2, min(round(local_scale * 0.002), round(min(box.width, box.height) * 0.1)))
                 ink[max(0, box.y - pad):min(self.h, box.bottom + pad),
                     max(0, box.x - pad):min(self.w, box.right + pad)] = 0
-        for size in sorted({3, max(3, round(max(gray.shape) * 0.005)) | 1,
-                            max(5, round(max(gray.shape) * 0.011)) | 1}):
+        for size in sorted({3, max(3, round(local_scale * 0.005)) | 1,
+                            max(5, round(local_scale * 0.011)) | 1}):
             closed = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((size, size), np.uint8))
             _, labels, stats, _ = cv2.connectedComponentsWithStats(1 - closed, connectivity=4)
             self.levels.append((labels, stats))

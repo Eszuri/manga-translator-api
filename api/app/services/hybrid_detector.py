@@ -27,6 +27,9 @@ class HybridBubbleDetector(BaseBubbleDetector):
         if not raw:
             return []
         width, height = image.size
+        # A long strip must not raise the minimum area of an unchanged local
+        # dialogue merely because more panels were appended below it.
+        local_page_area = width * min(height, width * 2)
         gray = np.array(image.convert('L'))
         regions = BalloonRegions(gray, self.white_threshold,
                                  [b.text_box or b.bounding_box for b in raw])
@@ -36,8 +39,8 @@ class HybridBubbleDetector(BaseBubbleDetector):
             if text is None:
                 continue
             match = regions.match(text)
-            if (text.area < max(300, width * height * 0.0004)
-                    and (match is None or match[2][2] * match[2][3] < max(2500, width * height * 0.002))):
+            if (text.area < max(300, local_page_area * 0.0004)
+                    and (match is None or match[2][2] * match[2][3] < max(2500, local_page_area * 0.002))):
                 continue
             for group in groups:
                 if (match is not None and group['match'] is not None
@@ -98,7 +101,7 @@ class HybridBubbleDetector(BaseBubbleDetector):
                 else:
                     balloon = text
             else:
-                pad = max(2, round(max(width, height) * 0.004))
+                pad = max(2, round(min(max(width, height), width * 2) * 0.004))
                 x, y = max(0, text.x - pad), max(0, text.y - pad)
                 balloon = BoundingBox(x=x, y=y, width=min(width, text.right + pad) - x,
                                       height=min(height, text.bottom + pad) - y)
