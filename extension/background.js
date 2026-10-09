@@ -33,7 +33,7 @@ async function apiRequest(endpoint, options = {}) {
   const url = `${baseUrl.replace(/\/$/, '')}${endpoint}`;
   
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  const timeoutId = setTimeout(() => controller.abort(), fetchOptions.body instanceof FormData ? 360000 : 30000);
   
   try {
     const res = await fetch(url, {
@@ -156,7 +156,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           clearTimeout(timeoutId);
           timeoutId = setTimeout(() => controller.abort(), 60000);
         };
-        resetStreamTimeout();
+        // Allow server queueing before headers, then use the normal idle timer.
+        timeoutId = setTimeout(() => controller.abort(), 360000);
         
         try {
           const res = await fetch(url, {
@@ -164,6 +165,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             body: formData,
             signal: controller.signal
           });
+          resetStreamTimeout();
           
           if (!res.ok) {
             let errorMsg = `HTTP error ${res.status}`;

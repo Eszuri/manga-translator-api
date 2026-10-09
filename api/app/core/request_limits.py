@@ -1,4 +1,5 @@
 from contextvars import ContextVar
+import asyncio
 from threading import Lock
 
 from starlette.exceptions import HTTPException
@@ -48,6 +49,8 @@ class ImageRequestLimitMiddleware:
         self.max_body_bytes = max_upload_bytes + 64 * 1024
         self._lock = Lock()
         self._active = 0
+        # Admission is bounded; execution is serial in the single-worker server.
+        self._processing_slot = asyncio.Semaphore(1)
         self._paths = {
             f"{api_prefix}/{endpoint}" for endpoint in (
                 "detect/bubbles", "ocr/recognize", "ocr/recognize-crop",
@@ -110,7 +113,28 @@ class ImageRequestLimitMiddleware:
             await response(scope, receive, send)
             return
 
-        lease = ImageRequestLease(self._release)
+        try:
+            await asyncio.wait_for(self._processing_slot.acquire(), timeout=300)
+        except TimeoutError:
+            self._release()
+            await JSONResponse(
+                status_code=503,
+                content={"detail": "Timed out waiting in the image processing queue."},
+                headers={"Retry-After": "3"},
+            )(scope, receive, send)
+            return
+        except BaseException:
+            self._release()
+            raise
+
+        loop = asyncio.get_running_loop()
+
+        def release_processing_slot():
+            self._release()
+            # Native GPU tasks may finish after the client disconnects.
+            loop.call_soon_threadsafe(self._processing_slot.release)
+
+        lease = ImageRequestLease(release_processing_slot)
         token = current_image_request.set(lease)
         try:
             await self.app(scope, limited_receive, send)
