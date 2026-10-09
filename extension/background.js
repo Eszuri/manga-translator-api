@@ -94,6 +94,114 @@ function base64ToBlob(base64, mimeType = 'image/jpeg') {
   return new Blob(byteArrays, { type: mimeType });
 }
 
+async function inpaintStream(data, sender) {
+  const request = { data };
+  const apiUrl = request.data.apiUrl || (await getSettings()).apiUrl;
+  const url = `${apiUrl.replace(/\/$/, '')}/api/v1/translate/inpaint-stream`;
+
+  const formData = new FormData();
+  if (request.data.fileBlob) {
+    formData.append('file', request.data.fileBlob, 'image.jpg');
+  } else if (request.data.fileData) {
+    const blob = base64ToBlob(request.data.fileData, request.data.mimeType || 'image/jpeg');
+    formData.append('file', blob, 'image.jpg');
+  }
+  for (const [key, value] of Object.entries(request.data)) {
+    if (!['fileBlob', 'fileData', 'mimeType', 'imageSrc', 'jobId', 'apiUrl'].includes(key)) {
+      formData.append(key, value);
+    }
+  }
+
+  const controller = new AbortController();
+  let timeoutId;
+  const resetStreamTimeout = () => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => controller.abort(), 60000);
+  };
+  // Allow server queueing before headers, then use the normal idle timer.
+  timeoutId = setTimeout(() => controller.abort(), 360000);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal
+    });
+    resetStreamTimeout();
+
+    if (!res.ok) {
+      let errorMsg = `HTTP error ${res.status}`;
+      try {
+        const err = await res.json();
+        if (err.detail) errorMsg = formatApiError(err.detail, res.status);
+      } catch {}
+      return { success: false, error: errorMsg };
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) buffer += decoder.decode() + '\n';
+      if (value && value.length) resetStreamTimeout();
+
+      if (value) buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const data = JSON.parse(trimmed);
+          if (data.stage === 'heartbeat') continue;
+          if (data.stage === 'done') {
+            finalResult = {
+              success: true,
+              data: data.image_base64,
+              totalDetected: data.total_detected,
+              durationMs: data.duration_ms
+            };
+          } else if (data.stage === 'error') {
+            finalResult = { success: false, error: data.message };
+          } else {
+            if (sender.tab?.id != null) {
+              await chrome.tabs.sendMessage(sender.tab.id, {
+                action: 'pipelineProgress',
+                stage: data.stage,
+                message: data.message,
+                jobId: request.data.jobId,
+                imageSrc: request.data.imageSrc,
+                totalBubbles: data.total_bubbles
+              }, { frameId: sender.frameId ?? 0 }).catch(() => {});
+            }
+          }
+        } catch (parseErr) {
+          console.warn('JSON parse error in stream chunk:', parseErr);
+        }
+      }
+      if (done) break;
+    }
+
+    if (finalResult) {
+      return finalResult;
+    } else {
+      return { success: false, error: 'The stream ended without data.' };
+    }
+  } catch (fetchErr) {
+    if (fetchErr.name === 'AbortError') {
+      return { success: false, error: 'Request timed out (server may be busy).' };
+    } else {
+      return { success: false, error: fetchErr.message };
+    }
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   (async () => {
     try {
@@ -136,108 +244,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse(result);
       }
       else if (request.action === 'inpaintPageStream') {
-        const apiUrl = request.data.apiUrl || (await getSettings()).apiUrl;
-        const url = `${apiUrl.replace(/\/$/, '')}/api/v1/translate/inpaint-stream`;
-        
-        const formData = new FormData();
-        if (request.data.fileData) {
-          const blob = base64ToBlob(request.data.fileData, request.data.mimeType || 'image/jpeg');
-          formData.append('file', blob, 'image.jpg');
-        }
-        for (const [key, value] of Object.entries(request.data)) {
-          if (!['fileData', 'mimeType', 'imageSrc', 'jobId', 'apiUrl'].includes(key)) {
-            formData.append(key, value);
-          }
-        }
-        
-        const controller = new AbortController();
-        let timeoutId;
-        const resetStreamTimeout = () => {
-          clearTimeout(timeoutId);
-          timeoutId = setTimeout(() => controller.abort(), 60000);
-        };
-        // Allow server queueing before headers, then use the normal idle timer.
-        timeoutId = setTimeout(() => controller.abort(), 360000);
-        
-        try {
-          const res = await fetch(url, {
-            method: 'POST',
-            body: formData,
-            signal: controller.signal
-          });
-          resetStreamTimeout();
-          
-          if (!res.ok) {
-            let errorMsg = `HTTP error ${res.status}`;
-            try {
-              const err = await res.json();
-              if (err.detail) errorMsg = formatApiError(err.detail, res.status);
-            } catch {}
-            sendResponse({ success: false, error: errorMsg });
-            return;
-          }
-          
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
-          let finalResult = null;
-          
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (value && value.length) resetStreamTimeout();
-            
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
-            
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed) continue;
-              try {
-                const data = JSON.parse(trimmed);
-                if (data.stage === 'heartbeat') continue;
-                if (data.stage === 'done') {
-                  finalResult = {
-                    success: true,
-                    data: data.image_base64,
-                    totalDetected: data.total_detected,
-                    durationMs: data.duration_ms
-                  };
-                } else if (data.stage === 'error') {
-                  finalResult = { success: false, error: data.message };
-                } else {
-                  if (sender.tab && sender.tab.id) {
-                    chrome.tabs.sendMessage(sender.tab.id, {
-                      action: 'pipelineProgress',
-                      stage: data.stage,
-                      message: data.message,
-                      jobId: request.data.jobId,
-                      imageSrc: request.data.imageSrc,
-                      totalBubbles: data.total_bubbles
-                    }).catch(() => {});
-                  }
-                }
-              } catch (parseErr) {
-                console.warn('JSON parse error in stream chunk:', parseErr);
-              }
-            }
-          }
-          
-          if (finalResult) {
-            sendResponse(finalResult);
-          } else {
-            sendResponse({ success: false, error: 'The stream ended without data.' });
-          }
-        } catch (fetchErr) {
-          if (fetchErr.name === 'AbortError') {
-            sendResponse({ success: false, error: 'Request timed out (server may be busy).' });
-          } else {
-            sendResponse({ success: false, error: fetchErr.message });
-          }
-        } finally {
-          clearTimeout(timeoutId);
-        }
+        sendResponse(await inpaintStream(request.data, sender));
       }
       else if (request.action === 'translateDialogues') {
         const result = await apiRequest('/api/v1/translate/dialogues', {
@@ -321,14 +328,16 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       formData.append('all_caps', settings.allCaps.toString());
       formData.append('return_format', settings.translationMode === 'inpaint' ? 'image' : 'json');
       
-      const endpoint = settings.translationMode === 'inpaint' ? '/api/v1/translate/inpaint-page' : '/api/v1/translate/page';
-      
-      const result = await apiRequest(endpoint, {
-          apiUrl: settings.apiUrl,
-          method: 'POST',
-          body: formData,
-          expectBlob: settings.translationMode === 'inpaint'
-      });
+      const result = settings.translationMode === 'inpaint'
+        ? await inpaintStream({
+            fileBlob: imgBlob, apiUrl: settings.apiUrl, jobId,
+            imageSrc: info.srcUrl, target_lang: settings.targetLang,
+            translator: settings.translator, reading_direction: settings.readingDirection,
+            typeset: true, font_scale: settings.fontScale, all_caps: settings.allCaps
+          }, { tab, frameId: target.frameId })
+        : await apiRequest('/api/v1/translate/page', {
+            apiUrl: settings.apiUrl, method: 'POST', body: formData
+          });
       
       await chrome.tabs.sendMessage(tab.id, {
           action: 'contextMenuTranslateResult',

@@ -280,6 +280,14 @@ class ComicTextDetector(BaseBubbleDetector):
                     'bounding_box': box, 'text_box': box,
                     'aspect_ratio': round(box.height / box.width, 2),
                 }))
+        # Full-page and tile passes can detect both a merged parent and its
+        # individual dialogues. After splitting, suppress duplicate children.
+        if refined:
+            selected = cv2.dnn.NMSBoxes(
+                [[b.text_box.x, b.text_box.y, b.text_box.width, b.text_box.height] for b in refined],
+                [b.confidence for b in refined], self.conf_threshold, 0.55,
+            )
+            refined = [refined[int(index)] for index in np.asarray(selected).reshape(-1)]
         ordered = sort_manga_reading_order(refined, reading_direction="rtl")
         return ordered
 

@@ -870,8 +870,12 @@ class MangaTranslator {
   handlePipelineProgress(request) {
     if (this.isMinimalLoadingStyle()) return;
 
-    const job = this.activeJobs.get(request.jobId);
-    if (!job || job.img.dataset.mtJobId !== request.jobId) return;
+    const contextJob = this.contextMenuLoadingSources.get(request.jobId);
+    const job = contextJob || this.activeJobs.get(request.jobId);
+    if (!job || !job.img.isConnected || job.generation !== this.operationGeneration) return;
+    if (contextJob) {
+      if (this.latestContextJobs.get(job.img) !== request.jobId || !this.isImageSourceCurrent(job)) return;
+    } else if (job.img.dataset.mtJobId !== request.jobId) return;
     const { img } = job;
 
     const wrapper = img.closest('.manga-translator-wrapper');
@@ -893,7 +897,7 @@ class MangaTranslator {
     const label = stageNames[request.stage] || 'Translate...';
     if (text) text.textContent = label;
 
-    if (this.progressBar) {
+    if (this.progressBar && !contextJob) {
       const pText = this.progressBar.querySelector('.manga-translator-progress-text');
       if (pText) {
         const currentIdx = this.totalProcessed + 1;

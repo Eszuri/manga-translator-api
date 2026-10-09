@@ -121,6 +121,35 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
         return [BoundingBox(x=text.x + int(xx.min()), y=text.y + int(yy.min()),
                             width=int(xx.max() - xx.min() + 1), height=int(yy.max() - yy.min() + 1))]
 
+    # Connected balloons can overlap vertically, or share the same text column.
+    # A full character-sized gutter separates dialogues, unlike the small
+    # spacing between Japanese columns/glyphs. Check both axes before the
+    # incomplete-mask guard: that guard must not preserve a merged model box.
+    candidates = []
+    for axis in (0, 1):
+        projection = clean.sum(axis=axis)
+        quiet = projection <= 2
+        edges = np.flatnonzero(np.diff(np.r_[False, quiet, False]))
+        for start, stop in zip(edges[::2], edges[1::2]):
+            if stop - start < char_height * (1.2 if axis == 0 else 1.5):
+                continue
+            parts = (clean[:, :start], clean[:, stop:]) if axis == 0 else (clean[:start], clean[stop:])
+            if min(part.sum() for part in parts) < max(40, clean.sum() * 0.08):
+                continue
+            bounds = []
+            for index, part in enumerate(parts):
+                yy, xx = np.nonzero(part)
+                if np.ptp(yy) < char_height * 2 or np.ptp(xx) < char_height * 0.5:
+                    break
+                bounds.append(BoundingBox(
+                    x=text.x + int(xx.min()) + (int(stop) if axis == 0 and index else 0),
+                    y=text.y + int(yy.min()) + (int(stop) if axis == 1 and index else 0),
+                    width=int(np.ptp(xx) + 1), height=int(np.ptp(yy) + 1)))
+            if len(bounds) == 2:
+                candidates.append((stop - start, bounds))
+    if candidates:
+        return max(candidates, key=lambda item: item[0])[1]
+
     row_ink = clean.sum(axis=1)
     quiet = row_ink <= max(2, round(text.width * 0.015))
     edges = np.flatnonzero(np.diff(np.r_[False, quiet, False]))
