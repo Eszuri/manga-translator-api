@@ -289,6 +289,9 @@ def build_extension_package_sync(log_func=None) -> bool:
 
 
 def format_log_line(prefix: str, text: str) -> str:
+    if "[Image]" in text:
+        from rich.markup import escape
+        return f"{prefix} {escape(text)}"
     if "[Translate]" in text:
         idx = text.find("[Translate]")
         payload = text[idx + len("[Translate]"):].strip()

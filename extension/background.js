@@ -100,6 +100,7 @@ async function inpaintStream(data, sender) {
   const url = `${apiUrl.replace(/\/$/, '')}/api/v1/translate/inpaint-stream`;
 
   const formData = new FormData();
+  if (request.data.jobId) formData.append('job_id', request.data.jobId);
   if (request.data.fileBlob) {
     formData.append('file', request.data.fileBlob, 'image.jpg');
   } else if (request.data.fileData) {
@@ -165,6 +166,8 @@ async function inpaintStream(data, sender) {
               totalDetected: data.total_detected,
               durationMs: data.duration_ms
             };
+          } else if (data.stage === 'cancelled') {
+            finalResult = { success: false, cancelled: true, error: data.message || 'Translation cancelled.' };
           } else if (data.stage === 'error') {
             finalResult = { success: false, error: data.message };
           } else {
@@ -246,6 +249,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       else if (request.action === 'inpaintPageStream') {
         sendResponse(await inpaintStream(request.data, sender));
       }
+      else if (request.action === 'cancelTranslationJob') {
+        sendResponse(await apiRequest(`/api/v1/translate/jobs/${encodeURIComponent(request.jobId)}/cancel`, {
+          apiUrl: request.apiUrl, method: 'POST'
+        }));
+      }
       else if (request.action === 'translateDialogues') {
         const result = await apiRequest('/api/v1/translate/dialogues', {
           method: 'POST',
@@ -301,51 +309,22 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+let contextSelectionCounter = 0;
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "translateMangaPage" && info.srcUrl) {
+    const selectedAt = Date.now() * 1000 + (++contextSelectionCounter % 1000);
     const jobId = crypto.randomUUID();
     const target = { frameId: info.frameId ?? 0 };
     try {
       const settings = await getSettings();
       const started = await chrome.tabs.sendMessage(tab.id, {
           action: 'contextMenuTranslateStart',
-          srcUrl: info.srcUrl, jobId, settings
+          srcUrl: info.srcUrl, jobId, settings, selectedAt
       }, target);
       if (!started?.success) throw new Error(started?.error || 'The image is no longer available.');
       
-      const imgRes = await fetch(started.sourceUrl || info.srcUrl);
-      if (!imgRes.ok) throw new Error(`Image request failed with HTTP ${imgRes.status}`);
-      const imgBlob = await imgRes.blob();
-      if (!imgBlob.type.startsWith('image/')) throw new Error('The image response is not an image.');
-      
-      const formData = new FormData();
-      formData.append('file', imgBlob, 'image.jpg');
-      formData.append('target_lang', settings.targetLang);
-      formData.append('translator', settings.translator);
-      formData.append('reading_direction', settings.readingDirection);
-      formData.append('typeset', 'true');
-      formData.append('font_scale', settings.fontScale.toString());
-      formData.append('all_caps', settings.allCaps.toString());
-      formData.append('return_format', settings.translationMode === 'inpaint' ? 'image' : 'json');
-      
-      const result = settings.translationMode === 'inpaint'
-        ? await inpaintStream({
-            fileBlob: imgBlob, apiUrl: settings.apiUrl, jobId,
-            imageSrc: info.srcUrl, target_lang: settings.targetLang,
-            translator: settings.translator, reading_direction: settings.readingDirection,
-            typeset: true, font_scale: settings.fontScale, all_caps: settings.allCaps
-          }, { tab, frameId: target.frameId })
-        : await apiRequest('/api/v1/translate/page', {
-            apiUrl: settings.apiUrl, method: 'POST', body: formData
-          });
-      
-      await chrome.tabs.sendMessage(tab.id, {
-          action: 'contextMenuTranslateResult',
-          srcUrl: info.srcUrl,
-          jobId,
-          result: result,
-          mode: settings.translationMode
-      }, target);
+      // The content script owns scheduling, progress and result application.
+      // Context-menu requests use the same single slot as automatic translation.
       
     } catch (error) {
       console.error("Context menu translation error:", error);

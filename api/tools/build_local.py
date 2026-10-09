@@ -213,7 +213,7 @@ def main() -> int:
 
     results = []
     for index, path in enumerate(images, 1):
-        print(f"[{index}/{len(images)}] {path.name}", flush=True)
+        print(f"[Image] Processing [{index}/{len(images)}]: {path.resolve()}", flush=True)
         try:
             result = process_page(path, output_dir, detector, ocr, translator,
                                   inpainter, typesetter, args)

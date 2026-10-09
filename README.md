@@ -80,10 +80,10 @@ Hasil paket (`.zip` dan `.crx`) otomatis dibuat di folder `dist`.
 
 ## Bagaimana Gambar Diproses
 
-- Gambar akan diproses ketika semua gambar pada web telah selesai dimuat dan memiliki dimensi asli minimal 500 × 700 piksel.
-- Maksimal dua gambar yang diproses secara paralel per halaman web.
-- Proses dilakukan bergantian sampai semua gambar pada halaman terselesaikan.
-- Gambar dalam viewport diprioritaskan. Gambar di luar viewport tetap diproses setelah antrean prioritas viewport selesai.
+- Proses otomatis menunggu gambar manga pada halaman selesai dimuat, termasuk lazy-load dengan sumber yang sudah tersedia. Gambar harus memiliki dimensi asli minimal 500 × 700 piksel.
+- Gambar gagal dimuat dilewati. Batas tunggu 30 detik per gambar dan 60 detik per pemindaian; halaman atau chapter berikutnya tidak dibuka otomatis.
+- Satu gambar diproses setiap kali, dari atas ke bawah. Gambar sejajar mengikuti arah baca yang dipilih. Scroll tidak mengubah urutan.
+- Klik kanan **Translate this Manga Page** memberi prioritas pada gambar pilihan. Jika ada proses aktif, extension menunggu konfirmasi pembatalan backend, memproses pilihan terbaru, lalu melanjutkan urutan normal termasuk gambar yang dihentikan. Tahap GPU yang sedang berjalan diselesaikan sebelum pembatalan.
 - Hasil disimpan dalam IndexedDB browser dan dapat digunakan kembali saat refresh tanpa harus translate ulang.
 
 ## Pemrosesan GPU

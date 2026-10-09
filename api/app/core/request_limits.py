@@ -15,6 +15,14 @@ class ImageRequestLease:
         self._tasks = 0
         self._finished = False
         self._released = False
+        self._release_callbacks = []
+
+    def add_release_callback(self, callback):
+        with self._lock:
+            if not self._released:
+                self._release_callbacks.append(callback)
+                return
+        callback()
 
     def start_task(self):
         with self._lock:
@@ -34,6 +42,9 @@ class ImageRequestLease:
         if self._finished and self._tasks == 0 and not self._released:
             self._released = True
             self._release()
+            for callback in self._release_callbacks:
+                callback()
+            self._release_callbacks.clear()
 
 
 current_image_request: ContextVar[ImageRequestLease | None] = ContextVar(

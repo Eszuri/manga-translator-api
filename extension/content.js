@@ -5,7 +5,15 @@ class MangaTranslator {
     this.failedImages = new Map();
     this.processingQueue = [];
     this.runningJob = null;
+    this.runningImage = null;
+    this.manualRequests = new Map();
     this.activeJobs = new Map();
+    this.completedJobs = new Map();
+    this.sourceOrder = new Map();
+    this.prioritySource = null;
+    this.latestContextSelection = 0;
+    this.batchReady = false;
+    this.imageLoadFailures = new Map();
     this.settings = null;
     this.totalProcessed = 0;
     this.totalImages = 0;
@@ -16,7 +24,6 @@ class MangaTranslator {
     this.contextMenuLoadingSources = new Map();
     this.imageLoadingCounts = new WeakMap();
     this.scanDebounceTimer = null;
-    this.viewportPriorityTimer = null;
     this.operationGeneration = 0;
     this.scanToken = null;
     this.responsiveImageStates = new WeakMap();
@@ -36,7 +43,7 @@ class MangaTranslator {
     }
     this.setupMessageListener();
     this.setupKeyboardShortcuts();
-    this.setupViewportPriority();
+    this.setupImageViewSync();
     this.setupMutationObserver();
 
     const hostname = window.location.hostname;
@@ -115,7 +122,7 @@ class MangaTranslator {
           break;
 
         case 'contextMenuTranslateStart':
-          sendResponse(this.startContextMenuLoading(request.srcUrl, request.jobId, request.settings));
+          sendResponse(this.startContextMenuLoading(request.srcUrl, request.jobId, request.settings, request.selectedAt));
           break;
 
         case 'contextMenuTranslateResult':
@@ -179,15 +186,18 @@ class MangaTranslator {
   }
 
   async scanAndProcess(options = {}) {
+    this.syncActiveJobImages();
     if (!this.isEnabled) return;
     if (this.cacheClearGeneration === this.operationGeneration) return;
     if (this.isScanning) return;
     if (options.retryFailed) {
       this.failedImages.clear();
+      this.imageLoadFailures.clear();
       this.restoredImageSources = new WeakMap();
     }
     this.isScanning = true;
     const token = {};
+    let loadComplete = false;
     const generation = this.operationGeneration;
     this.scanToken = token;
     try {
@@ -215,6 +225,7 @@ class MangaTranslator {
       }
 
       await this.waitForAllImagesToLoad(generation);
+      loadComplete = true;
       if (!this.isEnabled || generation !== this.operationGeneration) {
         return;
       }
@@ -236,7 +247,11 @@ class MangaTranslator {
         return;
       }
 
-      const prioritizedImages = this.prioritizeImagesByViewport(mangaImgs);
+      if (!this.batchReady) this.sourceOrder.clear();
+      this.orderImagesByPage(this.getPageImages().filter(img => this.isMangaImage(img)))
+        .forEach(img => this.rememberImageOrder(img));
+      const prioritizedImages = this.orderImagesByPage(mangaImgs);
+      for (const img of prioritizedImages) this.rememberImageOrder(img);
       for (const img of prioritizedImages) {
         try {
           await this.waitForImageReady(img);
@@ -258,7 +273,7 @@ class MangaTranslator {
         this.pendingImages.add(img);
         this.wrapImage(img);
         this.setQueuedState(img, true);
-        this.processingQueue.push(img);
+        if (!this.processingQueue.includes(img)) this.processingQueue.push(img);
       }
 
       this.totalImages = this.processedImages.size + this.pendingImages.size + this.failedImages.size;
@@ -285,6 +300,7 @@ class MangaTranslator {
       if (this.scanToken === token) {
         this.isScanning = false;
         this.scanToken = null;
+        if (loadComplete) this.batchReady = true;
         this.pumpQueue();
       }
     }
@@ -292,23 +308,42 @@ class MangaTranslator {
 
   async waitForAllImagesToLoad(generation = this.operationGeneration) {
     let settledAt = null;
+    let previousSources = '';
+    const started = new Map();
+    const deadline = Date.now() + 60000;
     while (this.isEnabled && generation === this.operationGeneration) {
-      if (!this.isEnabled || generation !== this.operationGeneration) return;
       const allImgs = this.getPageImages().filter(
-        img => this.canProcessImage(img) && !this.getImageExclusionReason(img) &&
-          (img.src || img.dataset.src || img.dataset.lazySrc)
+        img => this.canProcessImage(img) && !this.getImageExclusionReason(img, false) &&
+          (img.src || img.dataset.src || img.dataset.lazySrc || img.dataset.original ||
+           img.dataset.url || img.dataset.highres || img.getAttribute('data-srcset') ||
+           this.getPictureSources(img).some(source => source.getAttribute('data-srcset')))
       );
-      if (allImgs.length === 0) break;
-
-      const pending = allImgs.filter(img => !img.complete && (img.currentSrc || img.getAttribute('src')) &&
-        !(img.loading === 'lazy' && !this.isImageInViewport(img)));
+      const pending = [];
+      const sources = [];
+      for (const img of allImgs) {
+        this.loadLazyImage(img);
+        const source = this.getLoadingIdentity(img);
+        sources.push(source);
+        if (this.imageLoadFailures.has(source)) continue;
+        if (!started.has(img)) started.set(img, Date.now());
+        if (img.complete && img.naturalWidth > 0) continue;
+        if ((img.complete && img.naturalWidth === 0) || Date.now() - started.get(img) >= 30000 || Date.now() >= deadline) {
+          const reason = img.complete ? 'Image failed to load.' : 'Image loading exceeded 30 seconds.';
+          this.imageLoadFailures.set(source, reason);
+          this.recordImageFailure(img, reason);
+          console.warn('[MangaTranslator] Skipping image:', source, reason);
+        } else pending.push(img);
+      }
+      const sourceSnapshot = JSON.stringify(sources.sort());
+      if (sourceSnapshot !== previousSources) settledAt = null;
+      previousSources = sourceSnapshot;
 
       if (pending.length === 0) {
         if (settledAt === null) settledAt = Date.now();
         if (Date.now() - settledAt >= 600) break;
       } else settledAt = null;
 
-      if (this.progressBar) {
+      if (this.progressBar && this.activeJobs.size === 0) {
         const pText = this.progressBar.querySelector('.manga-translator-progress-text');
         if (pText) {
           pText.textContent = `⏳ Waiting for images to load (${pending.length} remaining)...`;
@@ -319,13 +354,44 @@ class MangaTranslator {
     }
   }
 
+  getLoadingIdentity(img) {
+    if (this.hasResponsiveImageSource(img) && !img.complete) {
+      return `responsive:${this.getImageSourceSignature(img, false)}`;
+    }
+    return this.getCanonicalSource(img) || img.getAttribute('src') ||
+      `responsive:${this.getImageSourceSignature(img, false)}`;
+  }
+
+  loadLazyImage(img) {
+    // Promote native and common data-attribute lazy sources without scrolling
+    // the page or requesting a different chapter from an infinite reader.
+    if (img.loading === 'lazy') img.loading = 'eager';
+    const lazySrcset = img.getAttribute('data-srcset');
+    if (lazySrcset && !img.getAttribute('srcset')) img.setAttribute('srcset', lazySrcset);
+    const lazySrc = img.dataset.src || img.dataset.lazySrc || img.dataset.original || img.dataset.url || img.dataset.highres;
+    if (lazySrc && (!img.getAttribute('src') || img.src.startsWith('data:') ||
+        /placeholder|blank/i.test(img.src) || (img.complete && !this.isMangaDimensions(img.naturalWidth, img.naturalHeight)))) {
+      try {
+        const source = new URL(lazySrc, window.location.href).href;
+        if (img.src !== source) img.src = source;
+      } catch { /* An invalid lazy URL will be reported as a load failure. */ }
+    }
+    this.getPictureSources(img).forEach(source => {
+      const srcset = source.getAttribute('data-srcset');
+      if (srcset && !source.getAttribute('srcset')) source.setAttribute('srcset', srcset);
+    });
+  }
+
   isMangaImage(img) {
     return img.complete && this.isMangaDimensions(img.naturalWidth, img.naturalHeight) &&
       !this.getImageExclusionReason(img);
   }
 
-  getImageExclusionReason(img) {
-    if (img.complete && !this.isMangaDimensions(img.naturalWidth, img.naturalHeight)) {
+  getImageExclusionReason(img, checkIntrinsic = true) {
+    const deferredSource = !checkIntrinsic && Boolean(img.dataset.src || img.dataset.lazySrc ||
+      img.dataset.original || img.dataset.url || img.dataset.highres || img.getAttribute('data-srcset') ||
+      this.getPictureSources(img).some(source => source.getAttribute('data-srcset')));
+    if (checkIntrinsic && img.complete && !this.isMangaDimensions(img.naturalWidth, img.naturalHeight)) {
       return 'The original image must be at least 500 × 700 pixels.';
     }
 
@@ -335,10 +401,10 @@ class MangaTranslator {
     const minDisplayWidth = Math.min(280, viewportWidth * 0.6);
     const width = img.clientWidth;
     const height = img.clientHeight;
-    if (width > 0 && height > 0 && (width < minDisplayWidth || height < 200)) {
+    if (!deferredSource && width > 0 && height > 0 && (width < minDisplayWidth || height < 200)) {
       return 'The image is displayed too small and looks like a thumbnail.';
     }
-    if (img.complete && (width <= 0 || height <= 0)) {
+    if (!deferredSource && img.complete && (width <= 0 || height <= 0)) {
       return 'The image is hidden or has no display area.';
     }
 
@@ -472,10 +538,11 @@ class MangaTranslator {
     this.failedImages.delete(img);
     this.restoredImageSources.delete(img);
     this.processingQueue = this.processingQueue.filter(queued => queued !== img);
+    this.manualRequests.delete(img);
     this.setQueuedState(img, false);
     this.activeJobs.forEach((job, jobId) => {
       if (job.img !== img) return;
-      this.activeJobs.delete(jobId);
+      // DOM/lazy-loading changes do not cancel an uploaded server job.
       this.finishImageLoading(null, img);
     });
     this.contextMenuLoadingSources.forEach((job, jobId) => {
@@ -676,7 +743,20 @@ class MangaTranslator {
 
   canProcessImage(img) {
     this.refreshImageSource(img);
-    if (this.processedImages.has(img) || this.pendingImages.has(img)) return false;
+    if (this.processedImages.has(img) || this.pendingImages.has(img) || this.runningImage === img) return false;
+    const source = this.getCanonicalSource(img);
+    if (this.imageLoadFailures.has(source) || this.imageLoadFailures.has(this.getLoadingIdentity(img))) return false;
+    if (Array.from(this.activeJobs.values()).some(job => job.originalSrc === source)) return false;
+    const completed = this.completedJobs.get(this.getImageCacheDescriptor(img, this.settings || {}).cacheKey || source);
+    if (completed && completed.originalSrc === source && img.isConnected) {
+      this.setTranslatedImageSource(img, completed.data);
+      this.processedImages.add(img);
+      this.wrapImage(img);
+      return false;
+    }
+    if (source && [...Array.from(this.processedImages).filter(other => other.isConnected), ...this.pendingImages, this.runningImage].some(
+      other => other && other !== img && this.getCanonicalSource(other) === source
+    )) return false;
     const restoredSource = this.restoredImageSources.get(img);
     if (restoredSource) {
       if (restoredSource === this.getImageSourceSignature(img, false)) return false;
@@ -703,72 +783,99 @@ class MangaTranslator {
     }, delayMs);
   }
 
-  isImageInViewport(img) {
-    const rect = img.getBoundingClientRect();
-    const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-
-    return rect.width > 0 &&
-      rect.height > 0 &&
-      rect.bottom > 0 &&
-      rect.right > 0 &&
-      rect.top < viewportHeight &&
-      rect.left < viewportWidth;
+  orderImagesByPage(images) {
+    const entries = images.map((img, index) => ({ img, index, rect: img.getBoundingClientRect() }))
+      .sort((a, b) => a.rect.top - b.rect.top || a.index - b.index);
+    const rows = [];
+    for (const entry of entries) {
+      const row = rows[rows.length - 1];
+      if (!row || entry.rect.top - row[0].rect.top > 4) rows.push([entry]);
+      else row.push(entry);
+    }
+    const direction = this.settings?.readingDirection === 'ltr' ? 1 : -1;
+    return rows.flatMap(row => row.sort((a, b) =>
+      direction * (a.rect.left - b.rect.left) || a.index - b.index).map(entry => entry.img));
   }
 
-  prioritizeImagesByViewport(images) {
-    const visible = [];
-    const outsideViewport = [];
-
-    const ordered = [...images].sort((a, b) => {
-      const relation = a.compareDocumentPosition(b);
-      return relation & 4 ? -1 : relation & 2 ? 1 : 0;
-    });
-    for (const img of ordered) {
-      if (this.isImageInViewport(img)) {
-        visible.push(img);
-      } else {
-        outsideViewport.push(img);
-      }
-    }
-
-    return [...visible, ...outsideViewport];
+  rememberImageOrder(img) {
+    const source = this.getCanonicalSource(img);
+    if (!this.sourceOrder.has(source)) this.sourceOrder.set(source, this.sourceOrder.size);
+    return this.sourceOrder.get(source);
   }
 
   prioritizeProcessingQueue() {
-    if (this.processingQueue.length < 2) return;
-    this.processingQueue = this.prioritizeImagesByViewport(this.processingQueue);
+    // Readers may recreate <img> nodes while scrolling. A source is one page,
+    // even when several DOM nodes reference it.
+    const sources = new Set();
+    const images = new Set();
+    this.processingQueue = this.processingQueue.map(img => {
+      if (img.isConnected) return img;
+      const source = this.getCanonicalSource(img);
+      const replacement = this.getPageImages().find(candidate => candidate.isConnected &&
+        this.getCanonicalSource(candidate) === source && this.isMangaImage(candidate));
+      if (!replacement) return img;
+      const manual = this.manualRequests.get(img);
+      this.manualRequests.delete(img);
+      this.pendingImages.delete(img);
+      this.setQueuedState(img, false);
+      if (manual) this.manualRequests.set(replacement, manual);
+      this.pendingImages.add(replacement);
+      this.wrapImage(replacement);
+      this.setQueuedState(replacement, true);
+      return replacement;
+    });
+    this.processingQueue = this.processingQueue.filter(img => {
+      if (images.has(img)) return false;
+      images.add(img);
+      const source = this.getCanonicalSource(img);
+      if (!img.isConnected || (source && sources.has(source))) {
+        this.pendingImages.delete(img);
+        this.manualRequests.delete(img);
+        this.setQueuedState(img, false);
+        return false;
+      }
+      if (source) sources.add(source);
+      return true;
+    });
+    if (this.prioritySource && !sources.has(this.prioritySource) &&
+        !Array.from(this.activeJobs.values()).some(job => job.originalSrc === this.prioritySource)) {
+      this.prioritySource = null;
+    }
+    this.processingQueue.forEach(img => this.rememberImageOrder(img));
+    this.processingQueue.sort((a, b) => {
+      const aSource = this.getCanonicalSource(a);
+      const bSource = this.getCanonicalSource(b);
+      if ((aSource === this.prioritySource) !== (bSource === this.prioritySource)) return aSource === this.prioritySource ? -1 : 1;
+      return this.sourceOrder.get(aSource) - this.sourceOrder.get(bSource);
+    });
   }
 
-  setupViewportPriority() {
-    const refreshPriority = () => {
-      if (!this.isEnabled || this.processingQueue.length < 2 || this.viewportPriorityTimer) return;
-
-      this.viewportPriorityTimer = setTimeout(() => {
-        this.viewportPriorityTimer = null;
-        this.prioritizeProcessingQueue();
-        this.pumpQueue();
-      }, 100);
-    };
-
-    window.addEventListener('scroll', refreshPriority, { passive: true });
-    window.addEventListener('resize', refreshPriority, { passive: true });
+  setupImageViewSync() {
+    const sync = () => this.syncActiveJobImages();
+    window.addEventListener('scroll', sync, { passive: true });
+    window.addEventListener('resize', sync, { passive: true });
   }
 
   pumpQueue() {
-    if (!this.isEnabled || this.isScanning || this.runningJob) return;
+    if ((!this.isEnabled && this.manualRequests.size === 0) || this.runningJob) return;
     this.prioritizeProcessingQueue();
 
     while (this.processingQueue.length > 0) {
+      const first = this.processingQueue[0];
+      if ((this.isScanning || !this.batchReady) && !this.manualRequests.has(first)) return;
       const img = this.processingQueue.shift();
       this.setQueuedState(img, false);
       if (!img.isConnected || !this.isMangaImage(img)) {
+        if (this.getCanonicalSource(img) === this.prioritySource) this.prioritySource = null;
         this.pendingImages.delete(img);
+        this.manualRequests.delete(img);
         continue;
       }
       // Reserve the slot before any async settings/decode/network operation.
       // Keep it until settlement, even when cancelPendingWork clears activeJobs.
-      this.runningJob = Promise.resolve().then(() => this.startTranslationJob(img))
+      this.runningImage = img;
+      const generation = this.operationGeneration;
+      this.runningJob = Promise.resolve().then(() => this.startTranslationJob(img, generation))
         .catch(error => console.warn('[MangaTranslator] Job failed:', error))
         .finally(() => {
           if (!this.processingQueue.includes(img) &&
@@ -776,12 +883,13 @@ class MangaTranslator {
             this.pendingImages.delete(img);
           }
           this.runningJob = null;
+          this.runningImage = null;
           this.pumpQueue();
         });
       return;
     }
 
-    if (this.processingQueue.length === 0 && this.activeJobs.size === 0) {
+    if (!this.isScanning && this.processingQueue.length === 0 && this.activeJobs.size === 0) {
       this.hideProgressBar();
     }
   }
@@ -791,15 +899,90 @@ class MangaTranslator {
     return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
 
-  async startTranslationJob(img) {
-    const generation = this.operationGeneration;
+  requestJobCancellation(job, requeue = true) {
+    if (job.cancelRequested) {
+      if (!requeue) job.requeueAfterCancel = false;
+      return;
+    }
+    job.cancelRequested = true;
+    job.requeueAfterCancel = requeue;
+    this.handlePipelineProgress({ jobId: job.id, stage: 'cancelling' });
+    if (job.submitted) {
+      job.cancelReply = this.sendMessage({ action: 'cancelTranslationJob', jobId: job.id, apiUrl: job.settings.apiUrl });
+    }
+  }
+
+  async waitForCancellation(job) {
+    if (!job.submitted) return;
+    let reply = job.cancelReply ? await job.cancelReply : null;
+    // Keep the single slot occupied if the stream disappeared but the server
+    // has not confirmed release. Never infer cancellation from a network error.
+    while (!reply?.success || !reply.data?.settled) {
+      this.handlePipelineProgress({ jobId: job.id, stage: 'cancelling' });
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      reply = await this.sendMessage({ action: 'cancelTranslationJob', jobId: job.id, apiUrl: job.settings.apiUrl });
+    }
+  }
+
+  requeueInterruptedJob(job) {
+    const img = this.getPageImages().find(candidate => candidate.isConnected &&
+      this.getCanonicalSource(candidate) === job.originalSrc && this.isMangaImage(candidate));
+    if (!img) return; // A later DOM scan restores it using the saved source order.
+    if (this.processingQueue.some(candidate => this.getCanonicalSource(candidate) === job.originalSrc)) return;
+    this.pendingImages.add(img);
+    if (job.manual) this.manualRequests.set(img, { settings: job.settings });
+    this.processingQueue.push(img);
+    this.setQueuedState(img, true);
+  }
+
+  bindJobImage(job) {
+    const matches = candidate => candidate.isConnected && !this.getImageExclusionReason(candidate) &&
+      this.getCanonicalSource(candidate) === job.originalSrc;
+    const img = matches(job.img) ? job.img : this.getPageImages().find(matches);
+    if (!img) return null;
+    if (!job.submitted && job.img !== img) return null;
+    if (job.img !== img) {
+      this.finishImageLoading(null, job.img);
+      this.pendingImages.delete(job.img);
+      if (job.img.dataset.mtJobId === job.id) delete job.img.dataset.mtJobId;
+      job.img = img;
+    }
+    this.processingQueue = this.processingQueue.filter(candidate => candidate !== img);
+    this.pendingImages.add(img);
+    img.dataset.mtJobId = job.id;
+    this.wrapImage(img);
+    this.setQueuedState(img, false);
+    // Do not increment the loading reference count on each scroll event.
+    if (!this.imageLoadingCounts.get(img)) this.beginImageLoading(null, img);
+    else this.showImageLoading(null, img);
+    return img;
+  }
+
+  syncActiveJobImages() {
+    this.activeJobs.forEach(job => {
+      if (job.generation !== this.operationGeneration) return;
+      if (this.bindJobImage(job) && job.lastProgress) this.handlePipelineProgress(job.lastProgress);
+    });
+  }
+
+  async startTranslationJob(img, generation = this.operationGeneration) {
     const jobId = this.createJobId();
-    const settings = { ...(this.settings || await this.loadSettings()) };
-    if (!this.isEnabled || generation !== this.operationGeneration || !img.isConnected || !this.isMangaImage(img)) return;
+    const manual = this.manualRequests.get(img);
+    this.manualRequests.delete(img);
+    const settings = { ...(manual?.settings || this.settings || await this.loadSettings()) };
+    if ((!this.isEnabled && !manual) || generation !== this.operationGeneration || !img.isConnected || !this.isMangaImage(img)) return;
     const descriptor = this.getImageCacheDescriptor(img, settings);
     const originalSrc = descriptor.originalSrc;
+    // A newer context selection can arrive during async settings loading.
+    if (this.prioritySource && this.prioritySource !== originalSrc) {
+      if (manual) this.manualRequests.set(img, manual);
+      if (!this.processingQueue.includes(img)) this.processingQueue.push(img);
+      return;
+    }
+    if (this.prioritySource === originalSrc) this.prioritySource = null;
     const job = {
       id: jobId,
+      manual: Boolean(manual),
       img,
       originalSrc,
       generation,
@@ -823,19 +1006,26 @@ class MangaTranslator {
 
     try {
       const result = await this.translateImage(job);
-      const isCurrentJob = this.activeJobs.get(jobId) === job && img.dataset.mtJobId === jobId;
-      if (!isCurrentJob || generation !== this.operationGeneration || !img.isConnected) return;
-      this.assertImageSourceCurrent(job);
+      if (this.activeJobs.get(jobId) !== job || generation !== this.operationGeneration) return;
+      if (job.cancelRequested || result.cancelled) {
+        if (!job.cancelRequested) this.requestJobCancellation(job);
+        return;
+      }
 
       if (result.success && result.data) {
-        if (img.dataset.mtCacheObjectUrl && window.MangaTranslationCache) {
-          window.MangaTranslationCache.revokeImageUrl(img.dataset.mtCacheObjectUrl);
-          delete img.dataset.mtCacheObjectUrl;
+        // Preserve a completed response even while its page is virtualized away.
+        this.completedJobs.set(job.cacheKey || originalSrc, { originalSrc, data: result.data });
+        img = this.bindJobImage(job);
+        if (img) {
+          if (img.dataset.mtCacheObjectUrl && window.MangaTranslationCache) {
+            window.MangaTranslationCache.revokeImageUrl(img.dataset.mtCacheObjectUrl);
+            delete img.dataset.mtCacheObjectUrl;
+          }
+          this.setTranslatedImageSource(img, result.data);
+          if (!this.processedImages.has(img)) this.totalProcessed++;
+          this.processedImages.add(img);
+          this.failedImages.delete(img);
         }
-        this.setTranslatedImageSource(img, result.data);
-        this.processedImages.add(img);
-        this.failedImages.delete(img);
-        this.totalProcessed++;
 
         if (window.MangaTranslationCache) {
           window.MangaTranslationCache.saveCachedTranslation({
@@ -860,24 +1050,31 @@ class MangaTranslator {
           }
         });
       } else {
-        this.recordImageFailure(img, result.error);
+        // A failed transport does not prove that the native worker has stopped.
+        if (job.submitted) this.requestJobCancellation(job, false);
+        this.recordImageFailure(job.img, result.error);
         console.warn('[MangaTranslator] Inpaint failed:', result.error);
       }
     } catch (e) {
-      if (this.activeJobs.get(jobId) !== job || img.dataset.mtJobId !== jobId) return;
+      if (this.activeJobs.get(jobId) !== job) return;
+      if (job.cancelRequested) return;
       if (e && (e.code === 'IMAGE_NOT_READY' || e.code === 'IMAGE_SOURCE_CHANGED')) {
         this.scheduleScan();
       } else {
-        this.recordImageFailure(img, e && e.message || String(e));
+        this.recordImageFailure(job.img, e && e.message || String(e));
       }
       console.error('[MangaTranslator] Failed to translate image:', e);
     } finally {
+      if (job.cancelRequested) await this.waitForCancellation(job);
       const ownsJob = this.activeJobs.get(jobId) === job;
       if (ownsJob) {
         this.activeJobs.delete(jobId);
-        this.pendingImages.delete(img);
-        if (img.dataset.mtJobId === jobId) delete img.dataset.mtJobId;
-        this.finishImageLoading(null, img);
+        this.pendingImages.delete(job.img);
+        if (job.img.dataset.mtJobId === jobId) delete job.img.dataset.mtJobId;
+        this.finishImageLoading(null, job.img);
+        if (job.cancelRequested && job.requeueAfterCancel && generation === this.operationGeneration) {
+          this.requeueInterruptedJob(job);
+        }
       }
       this.updateProgressBar();
       this.pumpQueue();
@@ -887,18 +1084,21 @@ class MangaTranslator {
   async translateImage(job) {
     const settings = job.settings;
     const fileData = await this.getImageDataUrl(job.img, job.originalSrc, job);
+    if (job.cancelRequested) return { success: false, cancelled: true };
     this.assertImageSourceCurrent(job);
-    if (!this.isEnabled || job.generation !== this.operationGeneration || this.activeJobs.get(job.id) !== job) {
+    if ((!this.isEnabled && !job.manual) || job.generation !== this.operationGeneration || this.activeJobs.get(job.id) !== job) {
       const error = new Error('The translation request was cancelled.');
       error.code = 'JOB_CANCELLED';
       throw error;
     }
 
+    job.submitted = true;
     return this.sendMessage({
       action: 'inpaintPageStream',
       data: {
         fileData: fileData,
         imageSrc: job.originalSrc,
+        source: /^(data|blob):/i.test(job.originalSrc) ? 'browser image' : job.originalSrc.slice(0, 8192),
         jobId: job.id,
         apiUrl: settings.apiUrl,
         mimeType: 'image/jpeg',
@@ -913,10 +1113,14 @@ class MangaTranslator {
   }
 
   handlePipelineProgress(request) {
-    if (this.isMinimalLoadingStyle()) return;
-
     const contextJob = this.contextMenuLoadingSources.get(request.jobId);
     const job = contextJob || this.activeJobs.get(request.jobId);
+    if (job?.cancelRequested && request.stage !== 'cancelling') return;
+    if (job && !contextJob) {
+      job.lastProgress = request;
+      this.bindJobImage(job);
+    }
+    if (this.isMinimalLoadingStyle()) return;
     if (!job || !job.img.isConnected || job.generation !== this.operationGeneration) return;
     if (contextJob) {
       if (this.latestContextJobs.get(job.img) !== request.jobId || !this.isImageSourceCurrent(job)) return;
@@ -936,18 +1140,20 @@ class MangaTranslator {
       ocr: 'OCR...',
       translate: 'Translating...',
       inpaint: 'Inpainting...',
-      render: 'Rendering...'
+      render: 'Rendering...',
+      cancelling: 'Cancelling; waiting for server...'
     };
 
     const label = stageNames[request.stage] || 'Translate...';
-    if (text) text.textContent = label;
+    if (text && text.textContent !== label) text.textContent = label;
 
     if (this.progressBar && !contextJob) {
       const pText = this.progressBar.querySelector('.manga-translator-progress-text');
       if (pText) {
         const currentIdx = this.totalProcessed + 1;
         const total = this.totalImages || currentIdx;
-        pText.textContent = `Page ${currentIdx}/${total} • ${label}`;
+        const progressLabel = `Page ${currentIdx}/${total} • ${label}`;
+        if (pText.textContent !== progressLabel) pText.textContent = progressLabel;
       }
     }
   }
@@ -1011,7 +1217,8 @@ class MangaTranslator {
     const loading = wrapper.querySelector('.manga-translator-loading');
     if (loading) {
       const text = loading.querySelector('.manga-translator-loading-text');
-      if (text) text.textContent = 'Detecting bubbles...';
+      const job = this.activeJobs.get(img.dataset.mtJobId);
+      if (text && !job?.lastProgress && text.textContent !== 'Detecting bubbles...') text.textContent = 'Detecting bubbles...';
       loading.style.display = 'flex';
     }
   }
@@ -1140,34 +1347,46 @@ class MangaTranslator {
     return img;
   }
 
-  startContextMenuLoading(srcUrl, jobId, requestSettings) {
-    const img = this.findImageBySrc(srcUrl);
+  startContextMenuLoading(srcUrl, jobId, requestSettings, selectedAt = Date.now() * 1000) {
+    if (selectedAt < this.latestContextSelection) return { success: true, status: 'superseded' };
+    this.latestContextSelection = selectedAt;
+    let img = this.findImageBySrc(srcUrl);
     if (!img || !jobId || !requestSettings || this.contextMenuLoadingSources.has(jobId)) {
       return { success: false, error: 'The image or translation request is no longer available.' };
     }
     const excluded = this.getImageExclusionReason(img);
     if (excluded) return { success: false, error: excluded };
     if (!img.complete) return { success: false, error: 'Wait for the original image to finish loading.' };
-    const settings = { ...requestSettings };
-    const descriptor = this.getImageCacheDescriptor(img, settings);
-    this.contextMenuLoadingSources.set(jobId, {
-      ...descriptor, settings, srcUrl,
-      generation: this.operationGeneration,
-      originalWidth: img.naturalWidth,
-      originalHeight: img.naturalHeight
-    });
-    this.latestContextJobs.set(img, jobId);
-    this.processingQueue = this.processingQueue.filter(queued => queued !== img);
-    this.setQueuedState(img, false);
-    this.activeJobs.forEach((job, activeId) => {
-      if (job.img !== img) return;
-      this.finishImageLoading(null, img);
-      this.activeJobs.delete(activeId);
-    });
-    delete img.dataset.mtJobId;
+    const source = this.getCanonicalSource(img);
+    const active = Array.from(this.activeJobs.values()).find(job => job.originalSrc === source);
+    if (active && !active.cancelRequested) {
+      this.prioritySource = null;
+      return { success: true, status: 'already_processing' };
+    }
+    const cacheKey = this.getImageCacheDescriptor(img, requestSettings).cacheKey;
+    const completed = this.completedJobs.get(cacheKey || source);
+    if (completed || (this.processedImages.has(img) && img.dataset.mtCacheKey === cacheKey)) {
+      this.prioritySource = null;
+      if (completed) this.setTranslatedImageSource(img, completed.data);
+      return { success: true, status: 'already_completed' };
+    }
+    this.prioritySource = source;
+    if (active) {
+      active.manual = true;
+      active.requeueAfterCancel = true;
+      return { success: true, status: 'queued' };
+    }
+    img = this.processingQueue.find(candidate => this.getCanonicalSource(candidate) === source && candidate.isConnected) || img;
+    this.manualRequests.set(img, { settings: { ...requestSettings } });
+    this.imageLoadFailures.delete(source);
+    this.failedImages.delete(img);
     this.pendingImages.add(img);
-    this.beginImageLoading(null, img);
-    return { success: true, sourceUrl: descriptor.originalSrc };
+    this.wrapImage(img);
+    this.setQueuedState(img, true);
+    if (!this.processingQueue.includes(img)) this.processingQueue.push(img);
+    this.activeJobs.forEach(job => this.requestJobCancellation(job));
+    this.pumpQueue();
+    return { success: true, status: 'queued' };
   }
 
   finishContextMenuLoading(jobId) {
@@ -1225,16 +1444,25 @@ class MangaTranslator {
   }
 
   updateProgressBar() {
+    const uniqueSources = images => new Set([...images].map(img => this.getCanonicalSource(img) || img));
+    const remaining = uniqueSources(this.processingQueue).size;
+    const completedSources = new Set([...uniqueSources(this.processedImages),
+      ...Array.from(this.completedJobs.values(), job => job.originalSrc)]);
+    const total = new Set([...uniqueSources(new Set([
+      ...this.processedImages, ...this.pendingImages, ...this.failedImages.keys(),
+      ...this.processingQueue, ...Array.from(this.activeJobs.values(), job => job.img)
+    ])), ...completedSources, ...Array.from(this.activeJobs.values(), job => job.originalSrc)]).size;
+    this.totalImages = total;
+    this.totalProcessed = completedSources.size;
     if (!this.progressBar) return;
     const text = this.progressBar.querySelector('.manga-translator-progress-text');
     const fill = this.progressBar.querySelector('.manga-translator-progress-fill');
-
-    const remaining = this.processingQueue.length;
-    const total = this.totalImages || this.totalProcessed + remaining + this.activeJobs.size;
     const pct = total === 0 ? 0 : (this.totalProcessed / total) * 100;
 
     text.textContent = `Translated ${this.totalProcessed}/${total} pages • Active: ${this.activeJobs.size} • Queued: ${remaining}`;
     fill.style.width = `${pct}%`;
+    const active = Array.from(this.activeJobs.values())[0];
+    if (active?.lastProgress) this.handlePipelineProgress(active.lastProgress);
   }
 
   hideProgressBar() {
@@ -1266,6 +1494,7 @@ class MangaTranslator {
   setupMutationObserver() {
     if (this.imageObserver) return;
     const observer = new MutationObserver((mutations) => {
+      this.syncActiveJobImages();
       let hasNewImages = false;
       for (const mutation of mutations) {
         if (mutation.type === 'attributes' && ['IMG', 'SOURCE'].includes(mutation.target.nodeName)) {
@@ -1408,6 +1637,12 @@ class MangaTranslator {
   }
 
   cancelPendingWork() {
+    this.activeJobs.forEach(job => this.requestJobCancellation(job, false));
+    this.completedJobs.clear();
+    this.sourceOrder.clear();
+    this.prioritySource = null;
+    this.batchReady = false;
+    this.imageLoadFailures.clear();
     this.operationGeneration++;
     this.scanToken = null;
     this.cacheClearGeneration = null;
@@ -1416,6 +1651,7 @@ class MangaTranslator {
     this.scanDebounceTimer = null;
     this.processingQueue.forEach(img => this.setQueuedState(img, false));
     this.processingQueue = [];
+    this.manualRequests.clear();
     this.activeJobs.forEach(({ img }) => {
       this.finishImageLoading(null, img);
       delete img.dataset.mtJobId;

@@ -4,7 +4,7 @@ import io
 import json
 import time
 from typing import Literal
-from fastapi import APIRouter, UploadFile, File, Form, Response
+from fastapi import APIRouter, UploadFile, File, Form, Path, Response
 from fastapi.responses import StreamingResponse
 
 from app.api.v1.image_uploads import read_validated_image
@@ -18,6 +18,7 @@ from app.schemas import (
 from app.core.config import settings
 from app.core.image_worker import run_image_task, stream_with_heartbeats
 from app.core.image_utils import to_rgb_image
+from app.core.translation_jobs import JOB_ID_PATTERN, JobCancelled, translation_jobs
 from app.services.detector import sort_manga_reading_order
 from app.services.ocr_service import get_ocr_service
 from app.services.translation_service import get_translation_service
@@ -29,6 +30,15 @@ from app.services.typesetting_service import MangaTypesettingService
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def log_image_source(file: UploadFile, source: str = "") -> None:
+    # Keep data URLs and control characters out of the terminal.
+    label = source or file.filename or "unnamed upload"
+    if label.startswith(("data:", "blob:")):
+        label = file.filename or "browser image"
+    label = "".join(char if char.isprintable() else " " for char in label)[:2048]
+    logger.info("[Image] Processing: %s", label)
 
 _hybrid_detector = None
 
@@ -70,6 +80,7 @@ def encode_image(image):
 @router.post("/page", response_model=DetectBubblesResponse)
 async def translate_manga_page(
     file: UploadFile = File(..., description="Manga page image file (JPEG, PNG, WebP)"),
+    source: str = Form("", max_length=8192),
     target_lang: str = Form(
         "id",
         description="Target translation language code ('id' for Indonesian, 'en' for English)"
@@ -80,6 +91,7 @@ async def translate_manga_page(
     )
 ):
     image = await read_validated_image(file)
+    log_image_source(file, source)
 
     start_time = time.perf_counter()
 
@@ -143,6 +155,7 @@ async def translate_dialogues(request: TranslateDialoguesRequest):
 @router.post("/inpaint-page")
 async def inpaint_and_translate_manga_page(
     file: UploadFile = File(..., description="Manga page image file (JPEG, PNG, WebP)"),
+    source: str = Form("", max_length=8192),
     target_lang: str = Form(
         "id",
         description="Target translation language code ('id' for Indonesian, 'en' for English)"
@@ -175,6 +188,7 @@ async def inpaint_and_translate_manga_page(
     )
 ):
     image = await read_validated_image(file)
+    log_image_source(file, source)
 
     start_time = time.perf_counter()
 
@@ -238,8 +252,20 @@ async def inpaint_and_translate_manga_page(
     )
 
 
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_translation_job(
+    job_id: str = Path(..., min_length=1, max_length=128, pattern=JOB_ID_PATTERN),
+):
+    # This path deliberately bypasses image admission and the processing slot.
+    # "cancelling" acknowledges intent; the terminal stream event confirms the
+    # pipeline stopped, and settled=true additionally confirms lease release.
+    return translation_jobs.cancel(job_id)
+
+
 @router.post("/inpaint-stream")
 async def inpaint_stream_manga_page(
+    source: str = Form("", max_length=8192),
+    job_id: str | None = Form(None, min_length=1, max_length=128, pattern=JOB_ID_PATTERN),
     file: UploadFile = File(..., description="Manga page image file (JPEG, PNG, WebP)"),
     target_lang: str = Form(
         "id",
@@ -268,15 +294,22 @@ async def inpaint_stream_manga_page(
         description="Render dialogue text in comic uppercase (default: True)"
     )
 ):
-    image = await read_validated_image(file)
+    job = translation_jobs.register(job_id)
+    try:
+        image = None if job.cancel_requested else await read_validated_image(file)
+    except BaseException:
+        job.finish("cancelled" if job.cancel_requested else "error")
+        raise
 
     async def stream_generator():
         start_time = time.perf_counter()
         try:
+            job.check_cancelled()
+            log_image_source(file, source)
             yield json.dumps({"stage": "detect", "message": "Detecting text bubbles..."}) + "\n"
             await asyncio.sleep(0.01)
 
-            ordered_bubbles, seg_mask = await run_image_task(
+            ordered_bubbles, seg_mask = await job.run_native(
                 detect_page, image, reading_direction, include_seg=True
             )
 
@@ -289,7 +322,7 @@ async def inpaint_stream_manga_page(
                 }) + "\n"
                 await asyncio.sleep(0.01)
 
-                ordered_bubbles = await run_image_task(recognize_bubbles, image, ordered_bubbles)
+                ordered_bubbles = await job.run_native(recognize_bubbles, image, ordered_bubbles)
                 candidates = [b for b in ordered_bubbles if (b.text or "").strip() and not is_graphic_text(b.text)]
 
                 if candidates:
@@ -301,8 +334,9 @@ async def inpaint_stream_manga_page(
                     await asyncio.sleep(0.01)
 
                     trans_service = get_translation_service()
-                    await trans_service.translate_bubbles_async(
-                        candidates, target_lang=target_lang, translator=translator
+                    await job.run_async(
+                        trans_service.translate_bubbles_async,
+                        candidates, target_lang=target_lang, translator=translator,
                     )
                     active_bubbles = [b for b in candidates if usable_translation(b.translation or "")]
                 else:
@@ -320,42 +354,58 @@ async def inpaint_stream_manga_page(
                 }) + "\n"
                 await asyncio.sleep(0.01)
 
+            job.check_cancelled()
             yield json.dumps({"stage": "inpaint", "message": "Removing original text (inpainting)..."}) + "\n"
             await asyncio.sleep(0.01)
+            job.check_cancelled()
 
             bubbles_to_inpaint = active_bubbles if typeset else ordered_bubbles
             inpainted_img = image
             if bubbles_to_inpaint:
                 inpaint_service = MangaInpaintingService()
-                inpainted_img = await run_image_task(
+                inpainted_img = await job.run_native(
                     inpaint_service.inpaint, image, seg_mask=seg_mask, bubbles=bubbles_to_inpaint
                 )
 
+            job.check_cancelled()
             yield json.dumps({"stage": "render", "message": "Rendering and typesetting text..."}) + "\n"
             await asyncio.sleep(0.01)
+            job.check_cancelled()
 
             if typeset and active_bubbles:
                 typeset_service = MangaTypesettingService(all_caps=all_caps)
-                final_img = await run_image_task(
+                final_img = await job.run_native(
                     typeset_service.typeset, inpainted_img, active_bubbles, font_scale=font_scale
                 )
             else:
                 final_img = inpainted_img
 
-            img_bytes = await run_image_task(encode_image, final_img)
+            img_bytes = await job.run_native(encode_image, final_img)
             img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
             duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            job.check_cancelled()
+            job.finish("done")
             yield json.dumps({
                 "stage": "done",
+                "job_id": job_id,
                 "message": "Complete",
                 "image_base64": f"data:image/jpeg;base64,{img_b64}",
                 "total_detected": len(ordered_bubbles),
                 "duration_ms": duration_ms
             }) + "\n"
 
+        except JobCancelled:
+            job.finish("cancelled")
+            yield json.dumps({
+                "stage": "cancelled", "job_id": job_id, "message": "Translation cancelled.",
+            }) + "\n"
         except Exception as e:
+            job.finish("error")
             yield json.dumps({"stage": "error", "message": str(e)}) + "\n"
+        finally:
+            if job.status is None:
+                job.finish("cancelled" if job.cancel_requested else "error")
 
     return StreamingResponse(
         stream_with_heartbeats(stream_generator()), media_type="application/x-ndjson"
