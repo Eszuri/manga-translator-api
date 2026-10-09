@@ -47,37 +47,75 @@ def validate_translations(
     return cleaned
 
 
-def extract_json_from_text(text: str) -> Optional[Any]:
+def extract_json_from_text(text: str) -> Any:
     # Some reasoning models include a separate thought block before the answer.
     # Never interpret JSON examples from that block as actual translations.
+    text = text.lstrip("\ufeff").strip()
+    if re.match(r"<think>", text, flags=re.IGNORECASE) and not re.search(r"</think>", text, flags=re.IGNORECASE):
+        raise TranslationError("LLM returned an unfinished <think> block; no final answer was found.")
     text = re.sub(r"^\s*<think>[\s\S]*?</think>", "", text, count=1, flags=re.IGNORECASE)
     text = text.strip()
     if not text:
-        return None
+        raise TranslationError("LLM returned empty message content.")
 
     try:
         return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as exc:
+        first_error = exc
 
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
-    if match:
+    # Inspect complete top-level containers, never a nested fragment of a
+    # malformed answer. Bracketed prose such as [final] is not a JSON start.
+    candidates = []
+    position = 0
+    while position < len(text):
+        match = re.search(r'[\[{]', text[position:])
+        if not match:
+            break
+        start = position + match.start()
+        following = text[start + 1:].lstrip()
+        if text[start] == '[' and following and following[0] not in '{[\"]-0123456789' and not following.startswith(('true', 'false', 'null')):
+            position = start + 1
+            continue
+        stack = []
+        quoted = escaped = False
+        end = start
+        for end in range(start, len(text)):
+            char = text[end]
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif char == '\\':
+                    escaped = True
+                elif char == '"':
+                    quoted = False
+                continue
+            if char == '"':
+                quoted = True
+            elif char in '[{':
+                stack.append(char)
+            elif char in ']}':
+                if not stack or (stack[-1], char) not in (('[', ']'), ('{', '}')):
+                    raise TranslationError("LLM JSON contains mismatched closing brackets.")
+                stack.pop()
+                if not stack:
+                    break
+        if stack or quoted:
+            raise TranslationError("LLM JSON is incomplete: an object, array, or quoted string was not closed.")
+        candidate = text[start:end + 1]
         try:
-            return json.loads(match.group(1).strip())
-        except json.JSONDecodeError:
-            pass
-
-    start = re.search(r"[\[{]", text)
-    if start:
-        try:
-            parsed, end = json.JSONDecoder().raw_decode(text[start.start():])
-            # Do not accept only the first of several JSON answers.
-            if not re.search(r"[\[{]", text[start.start() + end:]):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-    return None
+            candidates.append(json.loads(candidate))
+        except json.JSONDecodeError as exc:
+            raise TranslationError(
+                f"LLM JSON syntax error at line {exc.lineno}, column {exc.colno}: {exc.msg}."
+            ) from exc
+        position = end + 1
+    if len(candidates) > 1:
+        raise TranslationError("LLM returned multiple JSON answers; expected exactly one translation object.")
+    if candidates:
+        return candidates[0]
+    raise TranslationError(
+        f"LLM response contains no JSON object or array (line {first_error.lineno}, column {first_error.colno}: {first_error.msg})."
+    )
 
 
 class MangaTranslationService:
@@ -94,6 +132,7 @@ class MangaTranslationService:
         self.base_url = (base_url or settings.LLM_BASE_URL).rstrip("/")
         self.model = model or settings.LLM_MODEL
         self.timeout_seconds = timeout_seconds or settings.LLM_TIMEOUT_SECONDS
+        self._json_mode_supported = True
 
     def is_configured(self) -> bool:
         if not self.api_key or self.api_key.lower() in ("your_api_key_here", "none", ""):
@@ -345,8 +384,21 @@ class MangaTranslationService:
                                         messages: List[Dict[str, str]],
                                         dialogue_items: List[Dict[str, Any]], stage: str) -> Dict[int, str]:
         payload = {"model": self.model, "messages": list(messages), "temperature": 0.2}
+        if self._json_mode_supported:
+            payload["response_format"] = {"type": "json_object"}
         for attempt in range(2):
             response = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+            # Only retry without JSON mode when the provider explicitly rejects
+            # that parameter. Authentication, quota and unrelated errors remain errors.
+            if response.status_code in (400, 422) and "response_format" in payload:
+                error_text = response.text.lower()
+                if ("response_format" in error_text or "json_object" in error_text) and any(
+                    marker in error_text for marker in ("not supported", "unsupported", "unknown parameter", "unrecognized", "not permitted", "extra inputs")
+                ):
+                    self._json_mode_supported = False
+                    payload.pop("response_format")
+                    logger.warning("[Translate] Endpoint rejected JSON mode; using prompt-based JSON validation.")
+                    response = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
             if response.status_code != 200:
                 raise TranslationError(
                     f"LLM {stage} failed (HTTP {response.status_code}). Check the model, endpoint, API key, or quota."
@@ -365,9 +417,14 @@ class MangaTranslationService:
                     raise TranslationError(f"LLM {stage} output was truncated (finish_reason=length).")
                 return self._parse_llm_response(raw_content, dialogue_items)
             except TranslationError as exc:
+                response_details = (
+                    f"finish_reason={choice.get('finish_reason')}, "
+                    f"content_chars={len(raw_content) if isinstance(raw_content, str) else 0}"
+                )
                 if attempt:
-                    raise TranslationError(f"LLM {stage} remained invalid after one format retry: {exc}") from exc
-                logger.warning("[Translate] LLM %s response rejected; retrying once: %s", stage, exc)
+                    raise TranslationError(f"LLM {stage} remained invalid after one format retry ({response_details}): {exc}") from exc
+                logger.warning("[Translate] LLM %s response rejected (%s); retrying once: %s",
+                               stage, response_details, exc)
                 # Include the rejected answer so the endpoint can actually fix
                 # it, rather than receiving a reference to an unseen response.
                 if isinstance(raw_content, str) and raw_content.strip():
