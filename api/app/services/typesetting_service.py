@@ -199,17 +199,25 @@ class MangaTypesettingService:
 
     def _readable_layout(self, text, box, image_size, draw, page_scale,
                          font_scale, stroke_enabled, obstacles,
-                         position_guides=None, all_candidates=False):
+                         position_guides=None, all_candidates=False, preferred_cap=None):
         page_w, page_h = image_size
         preferred = self._preferred_font_size(
             text, page_scale, font_scale, min(page_w, page_h)
         )
-        minimum = max(12, int(round(min(preferred, 18 * page_scale * font_scale))))
+        minimum = max(12, int(round(min(preferred, 14 * page_scale * font_scale))))
+        x1, y1, x2, y2 = box
+        original_w, original_h = x2 - x1, y2 - y1
+        # Derive the font target from local capacity and translated length.
+        # A page-wide font target alone made long dialogue spill out even when
+        # a smaller, readable font could fit the balloon.
+        glyph_count = max(1, sum(not char.isspace() for char in text))
+        local_size = math.sqrt(original_w * original_h / (glyph_count * 0.8)) * font_scale
+        preferred = min(preferred, max(minimum, int(round(local_size))))
+        if preferred_cap is not None:
+            preferred = min(preferred, max(minimum, int(round(preferred_cap))))
         sizes = sorted({minimum, *(max(minimum, int(round(preferred * ratio)))
                                   for ratio in (1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.6, 0.5))},
                        reverse=True)
-        x1, y1, x2, y2 = box
-        original_w, original_h = x2 - x1, y2 - y1
         fitted_blocks = 0
         candidates = []
 
@@ -264,7 +272,7 @@ class MangaTypesettingService:
                     overflow_x = max(0, text_w / original_w - 1)
                     overflow_y = max(0, text_h / original_h - 1)
                     score = (2 * math.log(preferred / size) ** 2
-                             + 0.25 * (overflow_x ** 2 + overflow_y ** 2)
+                             + 0.5 * (overflow_x ** 2 + overflow_y ** 2)
                              + 2 * movement / max(original_w, original_h) ** 2)
                     candidates.append(((score, -size, movement), result))
         if candidates:
@@ -361,7 +369,8 @@ class MangaTypesettingService:
             placements.append((bounds, movement))
         return placements
 
-    def _plan_layouts(self, entries, image_size, draw, page_scale, font_scale, stroke_enabled):
+    def _plan_layouts(self, entries, image_size, draw, page_scale, font_scale, stroke_enabled,
+                      font_caps=None):
         choices = {}
         for index, (bubble_id, text, box) in enumerate(entries):
             try:
@@ -370,6 +379,7 @@ class MangaTypesettingService:
                     stroke_enabled, [], position_guides=[entry[2] for other_index, entry in enumerate(entries)
                                                         if other_index != index],
                     all_candidates=True,
+                    preferred_cap=(font_caps or {}).get(index),
                 )
             except TypesettingError as exc:
                 raise TypesettingError(f"Bubble #{bubble_id}: {exc}") from exc
@@ -449,6 +459,7 @@ class MangaTypesettingService:
         # A short page strip uses the same text scale as a full-width page.
         page_scale = max(0.5, output_img.width / 900.0)
         entries = []
+        font_caps = {}
 
         for bubble in bubbles:
             text = bubble.translation or bubble.text
@@ -464,15 +475,38 @@ class MangaTypesettingService:
             # Keep overflow attached to the original dialogue. An estimated
             # empty balloon/layout rectangle can extend toward another bubble.
             box = bubble.text_box or bubble.layout_box or bubble.bounding_box
+            layout = bubble.layout_box
+            if (layout is not None and layout.x <= box.center_x <= layout.right
+                    and layout.y <= box.center_y <= layout.bottom):
+                # Use the balloon's inner space only when it does not also
+                # contain another dialogue's original glyphs.
+                overlaps_other = False
+                for other in bubbles:
+                    if other is bubble or not (other.translation or other.text or '').strip():
+                        continue
+                    other_box = other.text_box or other.bounding_box
+                    if (layout.x < other_box.right and layout.right > other_box.x
+                            and layout.y < other_box.bottom and layout.bottom > other_box.y):
+                        overlaps_other = True
+                        break
+                if not overlaps_other:
+                    box = layout
             x1, y1 = max(0, box.x), max(0, box.y)
             x2, y2 = min(output_img.width, box.right), min(output_img.height, box.bottom)
             if x2 <= x1 or y2 <= y1:
                 raise TypesettingError(f"Bubble #{bubble.id}: safe area is outside the image.")
 
+            source_count = sum(not char.isspace() for char in (bubble.text or ''))
+            if source_count and bubble.text_box is not None:
+                # Japanese glyph envelopes provide a local scale even on very
+                # wide pages. A short reply must not inherit a page-sized font.
+                font_caps[len(entries)] = (
+                    math.sqrt(bubble.text_box.area / source_count) * 1.15 * font_scale
+                )
             entries.append((bubble.id, text, (x1, y1, x2, y2)))
 
         layouts = self._plan_layouts(entries, output_img.size, ImageDraw.Draw(output_img),
-                                     page_scale, font_scale, stroke_color is not None)
+                                     page_scale, font_scale, stroke_color is not None, font_caps=font_caps)
         for font, lines, line_heights, spacing, bounds in layouts:
 
             stroke_width = max(2, int(round(font.size * 0.08))) if stroke_color is not None else 0

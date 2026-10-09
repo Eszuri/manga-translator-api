@@ -31,8 +31,56 @@ def adjacent_columns(a: BoundingBox, b: BoundingBox) -> bool:
             and gap <= max(4, 0.5 * min(a.width, b.width)))
 
 
+def split_at_balloon_boundaries(text: BoundingBox, gray: np.ndarray,
+                                segmentation: np.ndarray) -> List[BoundingBox]:
+    # A model block can span two vertically aligned balloons. Their outline
+    # crosses the text column and extends into the margins, unlike a glyph.
+    margin = max(6, round(text.width * 0.25))
+    left, right = max(0, text.x - margin), min(gray.shape[1], text.right + margin)
+    ink = gray[text.y:text.bottom, left:right] < 180
+    supported = ink & (segmentation[text.y:text.bottom, left:right] > 0.3)
+    rows = ((ink.sum(axis=1) >= max(20, ink.shape[1] * 0.65))
+            & (supported.sum(axis=1) < ink.sum(axis=1) * 0.25))
+    edges = np.flatnonzero(np.diff(np.r_[False, rows, False]))
+    source = gray[text.y:text.bottom, text.x:text.right] < 180
+    source_support = source & (segmentation[text.y:text.bottom, text.x:text.right] > 0.3)
+    cuts = []
+    minimum_height = max(12, round(text.height * 0.16))
+    minimum_ink = max(24, np.count_nonzero(source_support) * 0.12)
+    for start, stop in zip(edges[::2], edges[1::2]):
+        if (stop - start < 2 or start < minimum_height or text.height - stop < minimum_height
+                or source_support[:start].sum() < minimum_ink
+                or source_support[stop:].sum() < minimum_ink):
+            continue
+        cuts.append((int(start), int(stop)))
+    if not cuts:
+        return [text]
+    # Split one boundary at a time; recursion handles further balloons without
+    # dropping a small intermediate dialogue between two nearby outlines.
+    cuts = [min(cuts, key=lambda cut: abs((cut[0] + cut[1]) / 2 - text.height / 2))]
+    result = []
+    start = 0
+    for end, following in [*cuts, (text.height, text.height)]:
+        part = source_support[start:end]
+        if part.sum() < minimum_ink:
+            continue
+        # Keep unsupported glyphs in each child crop; segmentation supplies
+        # evidence for the split, not permission to discard other characters.
+        ink_part = source[start:end]
+        yy, xx = np.nonzero(ink_part)
+        result.append(BoundingBox(x=text.x + int(xx.min()), y=text.y + start + int(yy.min()),
+                                  width=int(xx.max() - xx.min() + 1),
+                                  height=int(yy.max() - yy.min() + 1)))
+        start = following
+    return result if len(result) >= 2 else [text]
+
+
 def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndarray,
                       direction: str) -> List[BoundingBox]:
+    parts = split_at_balloon_boundaries(text, gray, segmentation)
+    if len(parts) > 1:
+        return [box for part in parts
+                for box in refine_text_boxes(part, gray, segmentation, direction)]
     original = text
     pad = max(4, min(12, round(min(text.width, text.height) * 0.15)))
     x, y = max(0, text.x - pad), max(0, text.y - pad)
@@ -47,8 +95,8 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
     original_ink = gray[original.y:original.bottom, original.x:original.right] < 180
     original_support = segmentation[original.y:original.bottom, original.x:original.right] > 0.3
     ink_count = np.count_nonzero(original_ink)
-    if ink_count and np.count_nonzero(original_ink & original_support) < ink_count * 0.75:
-        return [original]
+    incomplete_support = (ink_count > 0 and
+                          np.count_nonzero(original_ink & original_support) < ink_count * 0.75)
     if np.count_nonzero(support) < 12:
         return [original]
     count, labels, stats, _ = cv2.connectedComponentsWithStats(support, connectivity=8)
@@ -67,6 +115,8 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
     if np.count_nonzero(clean) < 12:
         return [original]
     if direction != 'vertical':
+        if incomplete_support:
+            return [original]
         yy, xx = np.nonzero(clean)
         return [BoundingBox(x=text.x + int(xx.min()), y=text.y + int(yy.min()),
                             width=int(xx.max() - xx.min() + 1), height=int(yy.max() - yy.min() + 1))]
@@ -96,28 +146,17 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
         result = []
         for part in (clean[:split[0]], clean[split[1]:]):
             offset_y = 0 if not result else split[1]
-            cols = part.sum(axis=0)
-            low = cols <= 2
-            bounds = np.flatnonzero(np.diff(np.r_[False, low, False]))
-            bands = []
-            left = 0
-            for a, z in zip(bounds[::2], bounds[1::2]):
-                if z - a >= char_height * 0.6:
-                    bands.append((left, a, int(cols[left:a].sum())))
-                    left = z
-            bands.append((left, len(cols), int(cols[left:].sum())))
-            bands = [band for band in bands if band[2] > 0]
-            if len(bands) > 1:
-                dominant = max(bands, key=lambda band: band[2])
-                if dominant[2] >= 1.5 * max(b[2] for b in bands if b is not dominant):
-                    part = part.copy()
-                    part[:, :dominant[0]] = 0
-                    part[:, dominant[1]:] = 0
+            # Keep every column in each separated dialogue. A short column
+            # is not noise merely because its neighbour has more characters.
             yy, xx = np.nonzero(part)
             result.append(BoundingBox(x=text.x + int(xx.min()), y=text.y + offset_y + int(yy.min()),
                                       width=int(xx.max() - xx.min() + 1),
                                       height=int(yy.max() - yy.min() + 1)))
         return result
+    # An incomplete mask may prevent tightening, but it must not prevent the
+    # whitespace/column-offset split above from separating connected balloons.
+    if incomplete_support:
+        return [original]
     kernel = np.ones((max(3, round(char_height * 1.4)) | 1,
                       max(3, round(char_height * 0.25)) | 1), np.uint8)
     joined = cv2.dilate(clean, kernel)
@@ -252,9 +291,18 @@ class BalloonRegions:
                 if not label or count < 0.55 * paper_count:
                     continue
                 x, y, w, h, area = map(int, stats[label])
-                supported_area = max(text.area, sum(b.area for b in self.text_boxes
+                supported_boxes = [b for b in self.text_boxes
                     if 0 <= int(b.center_x) < self.w and 0 <= int(b.center_y) < self.h
-                    and labels[int(b.center_y), int(b.center_x)] == label))
+                    and labels[int(b.center_y), int(b.center_x)] == label]
+                supported_area = max(text.area, sum(b.area for b in supported_boxes))
+                # Connected balloon lobes can occupy most of a cropped image.
+                # Accept their enclosed region when multiple detected dialogues
+                # support it; HybridBubbleDetector partitions it per dialogue.
+                shared_enclosed = (
+                    level == 0 and len(supported_boxes) >= 2
+                    and x > 0 and y > 0 and x + w < self.w and y + h < self.h
+                    and area / (w * h) >= 0.45
+                )
                 # A short Japanese column can occupy very little of a balloon.
                 # Relax the text-area ratio only for a compact, enclosed region
                 # found with the smallest closing kernel, not open page paper
@@ -266,8 +314,9 @@ class BalloonRegions:
                     and text.width <= w * 0.35 and text.height <= h * 0.55
                 )
                 area_ratio = 64 if short_enclosed else 14
-                if (area < 40 or area > self.w * self.h * 0.28
-                        or w > self.w * 0.8 or h > self.h * 0.75
+                if (area < 40 or area > self.w * self.h * (0.65 if shared_enclosed else 0.28)
+                        or w > self.w * (0.98 if shared_enclosed else 0.8)
+                        or h > self.h * (0.95 if shared_enclosed else 0.75)
                         or w * h > supported_area * area_ratio or area / (w * h) < 0.3):
                     continue
                 if not (x <= text.center_x < x + w and y <= text.center_y < y + h):

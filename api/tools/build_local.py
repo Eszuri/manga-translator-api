@@ -84,7 +84,8 @@ def get_segmentation(detector, image: Image.Image):
 
 
 def load_font(size: int):
-    for path in ("C:/Windows/Fonts/meiryo.ttc", "C:/Windows/Fonts/arial.ttf"):
+    for path in ("C:/Windows/Fonts/meiryo.ttc", "C:/Windows/Fonts/msgothic.ttc",
+                 "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/arial.ttf"):
         if Path(path).is_file():
             return ImageFont.truetype(path, size)
     return ImageFont.load_default()
