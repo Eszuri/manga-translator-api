@@ -993,6 +993,7 @@ class MangaTranslator {
     const job = {
       id: jobId,
       manual: Boolean(manual),
+      priority: manual?.priority === true,
       img,
       originalSrc,
       generation,
@@ -1111,6 +1112,8 @@ class MangaTranslator {
         imageSrc: job.originalSrc,
         source: /^(data|blob):/i.test(job.originalSrc) ? 'browser image' : job.originalSrc.slice(0, 8192),
         jobId: job.id,
+        priority: job.priority,
+        pageTitle: document.title,
         apiUrl: settings.apiUrl,
         mimeType: 'image/jpeg',
         target_lang: settings.targetLang,
@@ -1132,8 +1135,22 @@ class MangaTranslator {
       job.lastProgress = request;
       this.bindJobImage(job);
     }
-    if (this.isMinimalLoadingStyle()) return;
     if (!job || !job.img.isConnected || job.generation !== this.operationGeneration) return;
+    const owner = request.activeTab;
+    const waitingLabel = owner
+      ? `Queued • ${owner.cancelling ? 'Stopping' : 'Processing'} tab: ${owner.title} (ID ${owner.tabId})`
+      : 'Queued; waiting for server...';
+    // Minimal mode still exposes the owner on hover without adding a global overlay.
+    if (this.isMinimalLoadingStyle()) {
+      const wrapper = job.img.closest('.manga-translator-wrapper');
+      const loader = wrapper?.querySelector('.manga-translator-minimal-loader');
+      if (loader) {
+        const label = request.stage === 'waiting_turn' ? waitingLabel : `Processing this tab • ${request.stage}`;
+        loader.title = label;
+        loader.setAttribute('aria-label', label);
+      }
+      return;
+    }
     if (contextJob) {
       if (this.latestContextJobs.get(job.img) !== request.jobId || !this.isImageSourceCurrent(job)) return;
     } else if (job.img.dataset.mtJobId !== request.jobId) return;
@@ -1153,11 +1170,13 @@ class MangaTranslator {
       translate: 'Translating...',
       inpaint: 'Inpainting...',
       render: 'Rendering...',
-      cancelling: 'Cancelling; waiting for server...'
+      cancelling: 'Cancelling; waiting for server...',
+      waiting_turn: waitingLabel
     };
 
     const label = stageNames[request.stage] || 'Translate...';
     if (text && text.textContent !== label) text.textContent = label;
+    if (text) text.title = owner ? `${owner.pageUrl}\n${owner.imageSrc}` : '';
 
     if (this.progressBar && !contextJob) {
       const pText = this.progressBar.querySelector('.manga-translator-progress-text');
@@ -1393,7 +1412,7 @@ class MangaTranslator {
       this.requestJobCancellation(active, false);
     }
     img = this.processingQueue.find(candidate => this.getCanonicalSource(candidate) === source && candidate.isConnected) || img;
-    this.manualRequests.set(img, { settings: { ...requestSettings } });
+    this.manualRequests.set(img, { settings: { ...requestSettings }, priority: true });
     this.imageLoadFailures.delete(source);
     this.failedImages.delete(img);
     this.pendingImages.add(img);

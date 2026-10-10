@@ -1,3 +1,5 @@
+importScripts('job_scheduler.js');
+
 const DEFAULT_SETTINGS = {
   apiUrl: 'http://127.0.0.1:8000',
   targetLang: 'id',
@@ -109,7 +111,7 @@ async function inpaintStream(data, sender) {
     formData.append('file', blob, 'image.jpg');
   }
   for (const [key, value] of Object.entries(request.data)) {
-    if (!['fileBlob', 'fileData', 'mimeType', 'imageSrc', 'jobId', 'apiUrl'].includes(key)) {
+    if (!['fileBlob', 'fileData', 'mimeType', 'imageSrc', 'jobId', 'apiUrl', 'priority', 'pageTitle'].includes(key)) {
       formData.append(key, value);
     }
   }
@@ -180,7 +182,8 @@ async function inpaintStream(data, sender) {
                 jobId: request.data.jobId,
                 imageSrc: request.data.imageSrc,
                 totalBubbles: data.total_bubbles
-              }, { frameId: sender.frameId ?? 0 }).catch(() => {});
+              }, sender.documentId ? { documentId: sender.documentId } :
+                { frameId: sender.frameId ?? 0 }).catch(() => {});
             }
           }
         } catch (parseErr) {
@@ -205,6 +208,21 @@ async function inpaintStream(data, sender) {
     clearTimeout(timeoutId);
   }
 }
+
+const translationScheduler = new TranslationScheduler(inpaintStream,
+  job => apiRequest(`/api/v1/translate/jobs/${encodeURIComponent(job.data.jobId)}/cancel`, {
+    apiUrl: job.data.apiUrl, method: 'POST'
+  }),
+  (job, stage) => chrome.tabs.sendMessage(job.sender.tab.id, {
+    action: 'pipelineProgress', jobId: job.data.jobId, stage,
+    activeTab: translationScheduler.activeInfo()
+  }, job.sender.documentId ? { documentId: job.sender.documentId } :
+    { frameId: job.sender.frameId ?? 0 }).catch(() => {}));
+
+chrome.tabs.onRemoved.addListener(tabId => translationScheduler.closeTab(tabId));
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status === 'loading') translationScheduler.closeTab(tabId);
+});
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   (async () => {
@@ -248,12 +266,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse(result);
       }
       else if (request.action === 'inpaintPageStream') {
-        sendResponse(await inpaintStream(request.data, sender));
+        sendResponse(await translationScheduler.enqueue(request.data, sender));
       }
       else if (request.action === 'cancelTranslationJob') {
-        sendResponse(await apiRequest(`/api/v1/translate/jobs/${encodeURIComponent(request.jobId)}/cancel`, {
+        sendResponse(await (translationScheduler.cancelOwned(request.jobId, sender) || apiRequest(`/api/v1/translate/jobs/${encodeURIComponent(request.jobId)}/cancel`, {
           apiUrl: request.apiUrl, method: 'POST'
-        }));
+        })));
       }
       else if (request.action === 'translateDialogues') {
         const result = await apiRequest('/api/v1/translate/dialogues', {
