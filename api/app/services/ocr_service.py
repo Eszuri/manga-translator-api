@@ -108,6 +108,7 @@ class MangaOcrService:
         last_hidden_state = encoder_outputs[0]
 
         input_ids = np.array([[self.bos_token_id]], dtype=np.int64)
+        completed = False
 
         for _ in range(max_length):
             decoder_inputs = {
@@ -120,10 +121,27 @@ class MangaOcrService:
             input_ids = np.concatenate([input_ids, np.array([[next_token]], dtype=np.int64)], axis=-1)
 
             if next_token == self.eos_token_id:
+                completed = True
                 break
+
+            # A failed crop can trap the greedy decoder in a repeated-token
+            # loop. Do not translate a fabricated scream or return its prefix.
+            if input_ids.shape[1] >= 33 and np.all(input_ids[0, -32:] == next_token):
+                logger.warning("[OCR] Rejected repeated-token output for crop %s; original pixels will be preserved.", image.size)
+                return ""
+
+        if not completed:
+            logger.warning("[OCR] Rejected unfinished output after %d tokens for crop %s; original pixels will be preserved.", max_length, image.size)
+            return ""
 
         text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
         text = "".join(text.split())
+        if re.search(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]", text):
+            logger.warning("[OCR] Rejected unsupported Korean glyphs from Japanese OCR for crop %s; original pixels will be preserved.", image.size)
+            return ""
+        if re.search(r"([^\W\d_])\1{31,}", text):
+            logger.warning("[OCR] Rejected repetitive decoded text for crop %s; original pixels will be preserved.", image.size)
+            return ""
         text = text.replace("…", "...")
         text = re.sub(r"[・.]{2,}", lambda x: (x.end() - x.start()) * ".", text)
         text = jaconv.h2z(text, ascii=True, digit=True)
