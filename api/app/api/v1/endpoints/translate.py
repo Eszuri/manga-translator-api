@@ -404,6 +404,7 @@ async def inpaint_stream_manga_page(
                 "stage": "cancelled", "job_id": job_id, "message": "Translation cancelled.",
             }) + "\n"
         except Exception as e:
+            logger.error("[Pipeline] Failed job=%s source=%s: %s", job_id, source, e)
             job.finish("error")
             yield json.dumps({"stage": "error", "message": str(e)}) + "\n"
         finally:

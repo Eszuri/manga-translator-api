@@ -1067,7 +1067,8 @@ class MangaTranslator {
         // A failed transport does not prove that the native worker has stopped.
         if (job.submitted) this.requestJobCancellation(job, false);
         this.recordImageFailure(job.img, result.error);
-        console.warn('[MangaTranslator] Inpaint failed:', result.error);
+        this.sendMessage({ action: 'reportExtensionError', message: result.error || 'Translation failed.',
+          source: originalSrc, jobId, apiUrl: settings.apiUrl });
       }
     } catch (e) {
       if (this.activeJobs.get(jobId) !== job) return;
@@ -1077,7 +1078,8 @@ class MangaTranslator {
       } else {
         this.recordImageFailure(job.img, e && e.message || String(e));
       }
-      console.error('[MangaTranslator] Failed to translate image:', e);
+      this.sendMessage({ action: 'reportExtensionError', message: e?.message || String(e),
+        source: originalSrc, jobId, apiUrl: settings.apiUrl });
     } finally {
       if (job.cancelRequested) await this.waitForCancellation(job);
       const ownsJob = this.activeJobs.get(jobId) === job;

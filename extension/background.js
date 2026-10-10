@@ -22,6 +22,17 @@ async function getSettings() {
   });
 }
 
+async function reportExtensionError(message, source = '', jobId = '', apiUrl) {
+  const result = await apiRequest('/api/v1/client-error', {
+    apiUrl, method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: String(message).slice(0, 2000),
+      source: String(source).slice(0, 2000), job_id: String(jobId).slice(0, 128) })
+  });
+  // Logging failures must not recursively create another error report.
+  if (!result.success) console.debug('[MangaTranslator] Server error log unavailable:', result.error);
+  return result;
+}
+
 function formatApiError(detail, status) {
   if (typeof detail === 'string') return detail;
   if (Array.isArray(detail)) {
@@ -187,7 +198,8 @@ async function inpaintStream(data, sender) {
             }
           }
         } catch (parseErr) {
-          console.warn('JSON parse error in stream chunk:', parseErr);
+          await reportExtensionError(`Invalid pipeline stream JSON: ${parseErr.message}`, request.data.imageSrc,
+            request.data.jobId, apiUrl);
         }
       }
       if (done) break;
@@ -244,7 +256,10 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   (async () => {
     try {
-      if (request.action === 'translationTabWork') {
+      if (request.action === 'reportExtensionError') {
+        sendResponse(await reportExtensionError(request.message, request.source, request.jobId, request.apiUrl));
+      }
+      else if (request.action === 'translationTabWork') {
         if (sender.tab?.id != null) translationScheduler.setTabWork(sender.tab.id, request.pending);
         sendResponse({ success: true });
       }
@@ -367,7 +382,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       // Context-menu requests use the same single slot as automatic translation.
       
     } catch (error) {
-      console.error("Context menu translation error:", error);
+      await reportExtensionError(`Context menu translation failed: ${error.message}`, info.srcUrl, jobId);
       await chrome.tabs.sendMessage(tab.id, {
           action: 'contextMenuTranslateError',
           srcUrl: info.srcUrl,

@@ -520,6 +520,9 @@ class MangaTranslationService:
                     logger.warning("[Translate] Endpoint rejected JSON mode; using prompt-based JSON validation.")
                     response = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
             if response.status_code != 200:
+                logger.error("[Translate] LLM %s failed: HTTP %s | model=%s | bubble_ids=%s",
+                             stage, response.status_code, self.model,
+                             [item["id"] for item in dialogue_items])
                 raise TranslationError(
                     f"LLM {stage} failed (HTTP {response.status_code}). Check the model, endpoint, API key, or quota."
                 )
