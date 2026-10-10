@@ -7,6 +7,21 @@ class TranslationScheduler {
     this.queue = [];
     this.active = null;
     this.lastTab = null;
+    this.focusedTab = null;
+    this.handoffTimer = null;
+    this.tabWork = new Map();
+  }
+
+  setTabWork(tabId, pending) {
+    this.tabWork.set(tabId, Boolean(pending));
+    this.pump();
+  }
+
+  setFocusedTab(tabId) {
+    this.focusedTab = tabId;
+    // Focus changes reorder pending work, never interrupt an uploaded image.
+    this.notifyWaiting();
+    this.pump();
   }
 
   enqueue(data, sender) {
@@ -75,15 +90,21 @@ class TranslationScheduler {
   }
 
   closeTab(tabId) {
+    this.tabWork.delete(tabId);
+    if (this.focusedTab === tabId) this.focusedTab = null;
     for (const job of [this.active, ...this.queue]) {
       if (job?.sender.tab.id === tabId) this.stop(job);
     }
   }
 
   async pump() {
-    if (this.active || !this.queue.length) return;
-    // Explicit selections win; otherwise FIFO with a turn for another tab.
+    if (this.active || this.handoffTimer || !this.queue.length) return;
+    // Explicit selections win, followed by the last focused browser tab.
     let index = this.queue.findLastIndex(job => job.data.priority);
+    if (index < 0) index = this.queue.findIndex(job => job.sender.tab.id === this.focusedTab);
+    // The focused tab may be decoding/uploading its next image. An empty
+    // background queue is not evidence that its page batch has finished.
+    if (index < 0 && this.tabWork.get(this.focusedTab)) return;
     if (index < 0) index = this.queue.findIndex(job => job.sender.tab.id !== this.lastTab);
     if (index < 0) index = 0;
     const job = this.queue.splice(index, 1)[0];
@@ -102,7 +123,12 @@ class TranslationScheduler {
     } finally {
       this.lastTab = job.sender.tab.id;
       this.active = null;
-      this.pump();
+      // Content scripts submit one image at a time. Give the finishing tab a
+      // short handoff window to submit its next image before selecting a tab.
+      this.handoffTimer = setTimeout(() => {
+        this.handoffTimer = null;
+        this.pump();
+      }, 150);
     }
   }
 }

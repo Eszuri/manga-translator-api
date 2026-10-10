@@ -858,6 +858,8 @@ class MangaTranslator {
   }
 
   pumpQueue() {
+    this.sendMessage({ action: 'translationTabWork', pending:
+      Boolean(this.runningJob || this.processingQueue.length || (this.isEnabled && this.isScanning)) });
     if ((!this.isEnabled && this.manualRequests.size === 0) || this.runningJob) return;
     this.prioritizeProcessingQueue();
 
@@ -1696,6 +1698,7 @@ class MangaTranslator {
     this.activeJobs.clear();
     this.contextMenuLoadingSources.forEach((job, jobId) => this.finishContextMenuLoading(jobId));
     this.pendingImages.clear();
+    this.sendMessage({ action: 'translationTabWork', pending: false });
   }
 
   restoreAllOriginals({ keepOriginals = true } = {}) {

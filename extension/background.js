@@ -220,6 +220,23 @@ const translationScheduler = new TranslationScheduler(inpaintStream,
     { frameId: job.sender.frameId ?? 0 }).catch(() => {}));
 
 chrome.tabs.onRemoved.addListener(tabId => translationScheduler.closeTab(tabId));
+let focusRevision = 0;
+async function refreshTranslationFocus() {
+  const revision = ++focusRevision;
+  try {
+    const window = await chrome.windows.getLastFocused();
+    const tabs = await chrome.tabs.query({ active: true, windowId: window.id });
+    if (revision === focusRevision && tabs[0]?.id != null) {
+      translationScheduler.setFocusedTab(tabs[0].id);
+    }
+  } catch {}
+}
+chrome.tabs.onActivated.addListener(() => refreshTranslationFocus());
+chrome.windows.onFocusChanged.addListener(windowId => {
+  // Leaving Chrome must preserve the last selected tab.
+  if (windowId !== chrome.windows.WINDOW_ID_NONE) refreshTranslationFocus();
+});
+refreshTranslationFocus();
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === 'loading') translationScheduler.closeTab(tabId);
 });
@@ -227,7 +244,11 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   (async () => {
     try {
-      if (request.action === 'checkHealth') {
+      if (request.action === 'translationTabWork') {
+        if (sender.tab?.id != null) translationScheduler.setTabWork(sender.tab.id, request.pending);
+        sendResponse({ success: true });
+      }
+      else if (request.action === 'checkHealth') {
         const result = await apiRequest('/api/v1/health', { method: 'GET' });
         sendResponse(result);
       } 
