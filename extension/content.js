@@ -164,13 +164,13 @@ class MangaTranslator {
   setSiteEnabled(enabled) {
     enabled = Boolean(enabled);
     if (this.isEnabled === enabled) return;
-    this.cancelPendingWork();
     this.isEnabled = enabled;
     if (enabled) {
+      this.cancelPendingWork();
       this.restoredImageSources = new WeakMap();
       this.scanAndProcess();
     } else {
-      this.hideProgressBar();
+      this.restoreAllOriginals({ keepOriginals: false });
     }
   }
 
@@ -866,7 +866,7 @@ class MangaTranslator {
       if ((this.isScanning || !this.batchReady) && !this.manualRequests.has(first)) return;
       const img = this.processingQueue.shift();
       this.setQueuedState(img, false);
-      if (!img.isConnected || !this.isMangaImage(img)) {
+      if (!img.isConnected || (!this.manualRequests.has(img) && !this.isMangaImage(img))) {
         if (this.getCanonicalSource(img) === this.prioritySource) this.prioritySource = null;
         this.pendingImages.delete(img);
         this.manualRequests.delete(img);
@@ -885,6 +885,7 @@ class MangaTranslator {
           }
           this.runningJob = null;
           this.runningImage = null;
+          if (generation !== this.operationGeneration && this.isEnabled) this.scheduleScan();
           this.pumpQueue();
         });
       return;
@@ -971,6 +972,14 @@ class MangaTranslator {
     const manual = this.manualRequests.get(img);
     this.manualRequests.delete(img);
     const settings = { ...(manual?.settings || this.settings || await this.loadSettings()) };
+    if (manual) {
+      try {
+        await this.waitForImageReady(img);
+      } catch (error) {
+        if (generation === this.operationGeneration) this.recordImageFailure(img, error.message);
+        return;
+      }
+    }
     if ((!this.isEnabled && !manual) || generation !== this.operationGeneration || !img.isConnected || !this.isMangaImage(img)) return;
     const descriptor = this.getImageCacheDescriptor(img, settings);
     const originalSrc = descriptor.originalSrc;
@@ -1071,7 +1080,7 @@ class MangaTranslator {
       const ownsJob = this.activeJobs.get(jobId) === job;
       if (ownsJob) {
         this.activeJobs.delete(jobId);
-        this.pendingImages.delete(job.img);
+        if (!this.processingQueue.includes(job.img)) this.pendingImages.delete(job.img);
         if (job.img.dataset.mtJobId === jobId) delete job.img.dataset.mtJobId;
         this.finishImageLoading(null, job.img);
         if (job.cancelRequested && job.requeueAfterCancel && generation === this.operationGeneration) {
@@ -1363,22 +1372,25 @@ class MangaTranslator {
     if (!img.complete) return { success: false, error: 'Wait for the original image to finish loading.' };
     const source = this.getCanonicalSource(img);
     const active = Array.from(this.activeJobs.values()).find(job => job.originalSrc === source);
-    if (active && !active.cancelRequested) {
-      this.prioritySource = null;
-      return { success: true, status: 'already_processing' };
+    // An explicit context action is always a fresh translation, never a cache
+    // restore. Remove every in-memory version of this source before queueing.
+    for (const [key, completed] of this.completedJobs) {
+      if (completed.originalSrc === source) this.completedJobs.delete(key);
     }
-    const cacheKey = this.getImageCacheDescriptor(img, requestSettings).cacheKey;
-    const completed = this.completedJobs.get(cacheKey || source);
-    if (completed || (this.processedImages.has(img) && img.dataset.mtCacheKey === cacheKey)) {
-      this.prioritySource = null;
-      if (completed) this.setTranslatedImageSource(img, completed.data);
-      return { success: true, status: 'already_completed' };
+    for (const candidate of this.getPageImages()) {
+      if (this.getCanonicalSource(candidate) !== source) continue;
+      this.processedImages.delete(candidate);
+      if (candidate.dataset.mtTranslated) this.restoreImageSource(candidate);
+      if (candidate.dataset.mtCacheObjectUrl && window.MangaTranslationCache) {
+        window.MangaTranslationCache.revokeImageUrl(candidate.dataset.mtCacheObjectUrl);
+        delete candidate.dataset.mtCacheObjectUrl;
+      }
+      this.restoredImageSources.delete(candidate);
     }
     this.prioritySource = source;
     if (active) {
-      active.manual = true;
-      active.requeueAfterCancel = true;
-      return { success: true, status: 'queued' };
+      // The replacement below owns requeue/settings, not the cancelled job.
+      this.requestJobCancellation(active, false);
     }
     img = this.processingQueue.find(candidate => this.getCanonicalSource(candidate) === source && candidate.isConnected) || img;
     this.manualRequests.set(img, { settings: { ...requestSettings } });
@@ -1388,7 +1400,7 @@ class MangaTranslator {
     this.wrapImage(img);
     this.setQueuedState(img, true);
     if (!this.processingQueue.includes(img)) this.processingQueue.push(img);
-    this.activeJobs.forEach(job => this.requestJobCancellation(job));
+    this.activeJobs.forEach(job => this.requestJobCancellation(job, job !== active));
     this.pumpQueue();
     return { success: true, status: 'queued' };
   }
@@ -1483,10 +1495,12 @@ class MangaTranslator {
     const failed = this.failedImages.size;
     text.textContent = failed
       ? `${this.totalProcessed} pages translated; ${failed} failed. Press Alt+T to retry.`
-      : `✅ Done! ${this.totalProcessed} pages translated`;
+      : this.totalProcessed > 0
+        ? `✅ Done! ${this.totalProcessed} pages translated`
+        : 'No manga images were translated.';
     fill.style.width = failed
       ? `${this.totalImages ? (this.totalProcessed / this.totalImages) * 100 : 0}%`
-      : '100%';
+      : this.totalProcessed > 0 ? '100%' : '0%';
 
     if (this.progressBarHideTimer) clearTimeout(this.progressBarHideTimer);
     this.progressBarHideTimer = setTimeout(() => {
@@ -1668,7 +1682,8 @@ class MangaTranslator {
   restoreAllOriginals({ keepOriginals = true } = {}) {
     this.cancelPendingWork();
     if (!keepOriginals) this.restoredImageSources = new WeakMap();
-    this.hideProgressBar();
+    this.hideDefaultProgressBar();
+    this.hideAllMinimalLoaders();
 
     document.querySelectorAll('img[data-mt-original-src]').forEach(img => {
       if (img.dataset.mtCacheObjectUrl && window.MangaTranslationCache) {
