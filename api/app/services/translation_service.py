@@ -4,6 +4,8 @@ import json
 import logging
 import time
 import unicodedata
+from collections import Counter
+from decimal import Decimal
 from urllib.parse import urlsplit
 from typing import Dict, List, Optional, Tuple, Any
 import httpx
@@ -16,6 +18,40 @@ logger = logging.getLogger(__name__)
 
 class TranslationError(RuntimeError):
     pass
+
+
+def _percentages(text: str) -> Counter:
+    normalized = unicodedata.normalize("NFKC", text)
+    return Counter(
+        Decimal(value.replace(",", "."))
+        for value in re.findall(
+            r"(?<![\d.,])(\d+(?:[.,]\d+)?)\s*(?:%|パーセント|persen\b|percent\b)",
+            normalized, flags=re.IGNORECASE,
+        )
+    )
+
+
+def _validate_llm_content(source: str, translation: str, bubble_id: int) -> None:
+    # Validate the string itself, not just the surrounding JSON envelope.
+    text = unicodedata.normalize("NFKC", translation)
+    if re.search(
+        r'```|</?(?:think|analysis)>|["\'](?:translations?|id)["\']\s*:'
+        r'|\bcorrect(?:ed)?\s+(?:json\s+)?output\s+(?:below|follows)\b'
+        r'|\b(?:wait[,.:!\s]*)?malformed\s*[.!:]'
+        r'|\b(?:invalid|malformed)\s+json\b',
+        text, flags=re.IGNORECASE,
+    ):
+        raise TranslationError(
+            f"LLM translation for bubble ID {bubble_id} contains JSON, markup, or response-repair commentary. "
+            "Return only the translated dialogue inside the translation field."
+        )
+    # Percentages have an unambiguous numeric representation across supported
+    # languages; do not reject ordinary numbers spelled out in dialogue.
+    if _percentages(source) != _percentages(translation):
+        raise TranslationError(
+            f"LLM translation for bubble ID {bubble_id} changed or omitted a percentage. "
+            "Preserve the original percentage in the same bubble using digits and %."
+        )
 
 
 def validate_translations(
@@ -33,6 +69,8 @@ def validate_translations(
             missing.append(bubble_id)
             continue
         normalized = unicodedata.normalize("NFKC", text)
+        if engine == "LLM":
+            _validate_llm_content(item["text"], text, bubble_id)
         if re.search(r'[\u3040-\u30ff\u3400-\u9fff]', normalized):
             untranslated.append(bubble_id)
             continue
@@ -206,6 +244,16 @@ class MangaTranslationService:
             "Use consistent names, terms, pronouns, and register within the supplied text. Romanize proper names; "
             "preserve the social meaning of honorifics naturally. Do not silently repair uncertain OCR by "
             "inventing missing words. Translate the supported meaning with minimal assumptions.\n"
+            "Accuracy takes priority over conversational style. First establish the actor, action, object, "
+            "negation, certainty, quantities, and conditions; preserve those facts when rephrasing. "
+            "An omitted Japanese subject is NOT automatically I or we. Carry an established subject across "
+            "consecutive clauses; if unavailable, use a subjectless fragment rather than inventing a speaker. "
+            "Distinguish probability (だろう, かもしれない) from certainty. "
+            "In adventure contexts, パーティー means an adventuring team (Indonesian: tim), not a celebration "
+            "or political party. 水属性 is water element, not weakness to water; resistance and weakness "
+            "are different properties. 危険 means dangerous, not slippery. These are contextual examples, "
+            "not extra dialogue to insert. Preserve percentages in their original bubble as digits followed "
+            "by %, including 100%; never shorten numbers or add words such as only without source support.\n"
             "Do not split output by character count. Keep complete meaning even when a translation is longer "
             "than its source. Fluency must not erase negation, conditions, uncertainty, or meaningful repetition.\n"
             f"Every translation must be in {lang_name}, with no Kanji, Hiragana, or Katakana. Preserve pauses "
@@ -229,6 +277,9 @@ class MangaTranslationService:
             "Check this draft against ALL original OCR bubbles together. The original is authoritative; "
             "the draft may contain mistakes. Correct mistranslated negation, conditions, questions/replies, "
             "names, inconsistent terms, omissions, additions, and clauses assigned to the wrong bubble. "
+            "Audit facts BEFORE polishing style: check every quantity against OCR, track the subject of "
+            "sentences continued across bubbles, and check element versus weakness, uncertainty versus "
+            "certainty, and contextual meanings of terms. Do not infer I/we from an omitted subject. "
             "Then edit the draft as a dialogue editor: read each line as something a character would "
             "actually say. Rewrite stiff sentence structure, overly formal everyday speech, unnatural "
             "word combinations, and redundant pronouns using the system style guide. Merely valid grammar "
@@ -507,7 +558,9 @@ class MangaTranslationService:
                         f"The response failed validation: {exc} "
                         "Return the complete corrected translation as ONLY a JSON object "
                         'with a "translations" array of {"id": integer, "translation": string}. '
-                        "Include each requested ID exactly once. No analysis or markdown."
+                        "Include each requested ID exactly once. Each translation string must contain only "
+                        "dialogue, never JSON fragments, explanations, or self-corrections. Preserve source "
+                        "facts and percentages. No analysis or markdown."
                     ),
                 })
         raise TranslationError(f"LLM {stage} did not produce translations.")

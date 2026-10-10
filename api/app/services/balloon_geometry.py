@@ -74,13 +74,43 @@ def split_connected_balloons(text: BoundingBox, gray: np.ndarray,
     my, mx = np.nonzero(mask)
     area_points = np.column_stack((mx, my))
     best, best_score = None, 0.0
-    for i, (a, depth_a) in enumerate(corners):
+    for i, (corner_a, depth_a) in enumerate(corners):
         for b, depth_b in corners[i + 1:]:
+            a = corner_a
+            # When revisiting a child, notches belonging to another lobe must
+            # not split ordinary columns inside this dialogue.
+            margin_x, margin_y = text.width * 0.35, text.height * 0.35
+            if any(not (text.x - x - margin_x <= p[0] <= text.right - x + margin_x
+                        and text.y - y - margin_y <= p[1] <= text.bottom - y + margin_y)
+                   for p in (a, b)):
+                continue
             delta = b - a
             length = float(np.linalg.norm(delta))
             if length < 8:
                 continue
             normal = np.array([-delta[1], delta[0]]) / length
+            # Outline notches may be staggered although the actual dialogue
+            # gutter is horizontal/vertical. Prefer an axis-aligned blank cut
+            # near their midpoint; a diagonal cut can steal a short punctuation
+            # column from the upper dialogue.
+            if abs(delta[0]) >= 2 * abs(delta[1]):
+                axis_normal = np.array([0.0, 1.0])
+            elif abs(delta[1]) >= 2 * abs(delta[0]):
+                axis_normal = np.array([1.0, 0.0])
+            else:
+                axis_normal = None
+            if axis_normal is not None:
+                midpoint = (a + b) / 2
+                axis_distance = (points - midpoint) @ axis_normal
+                reach = max(3, round(min(w, h) * 0.035))
+                axis_offset = min(range(-reach, reach + 1), key=lambda shift: (
+                    np.count_nonzero(np.abs(axis_distance - shift) < 3), abs(shift)))
+                shifted = axis_distance - axis_offset
+                if (np.count_nonzero(np.abs(shifted) < 3) == 0
+                        and min(np.count_nonzero(shifted < 0), np.count_nonzero(shifted >= 0))
+                        >= max(40, len(xx) * 0.12)):
+                    a = midpoint + axis_normal * axis_offset
+                    normal = axis_normal
             distance = (points - a) @ normal
             # The contour corners need not lie exactly on the text gutter.
             # Move the separator slightly within the neck to avoid punctuation.
@@ -113,10 +143,22 @@ def split_connected_balloons(text: BoundingBox, gray: np.ndarray,
 
 
 def refine_balloon_text(text: BoundingBox, gray: np.ndarray, segmentation: np.ndarray,
-                        direction: str, regions: "BalloonRegions") -> List[BoundingBox]:
+                        direction: str, regions: "BalloonRegions", _depth: int = 0) -> List[BoundingBox]:
     parts = split_connected_balloons(text, gray, segmentation, regions)
     if len(parts) > 1:
-        return parts
+        # A detector block may contain three or more connected dialogues.
+        # Re-run only the outline-guided split: generic text tightening would
+        # expand children back across their newly established boundaries.
+        if _depth >= 4:
+            return parts
+        result = []
+        for part in parts:
+            children = split_connected_balloons(part, gray, segmentation, regions)
+            if len(children) > 1 and all(child.area < part.area for child in children):
+                result.extend(refine_balloon_text(part, gray, segmentation, direction, regions, _depth + 1))
+            else:
+                result.append(part)
+        return result
     boxes = refine_text_boxes(text, gray, segmentation, direction)
     if len(boxes) > 1:
         match = regions.match(text)

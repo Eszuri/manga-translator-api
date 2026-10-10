@@ -26,7 +26,7 @@ class MangaTypesettingService:
         self,
         font_path: Optional[str] = None,
         padding_ratio: float = 0.14,
-        line_spacing_ratio: float = 0.20,
+        line_spacing_ratio: float = 0.12,
         all_caps: bool = True
     ):
         self.font_path = font_path or DEFAULT_FONT_PATH
@@ -141,7 +141,8 @@ class MangaTypesettingService:
 
     @staticmethod
     def _preferred_font_size(text: str, page_scale: float, font_scale: float, limit: int) -> int:
-        base = 30 if len(text.strip()) <= 2 else (32 if len(text.split()) >= 15 else 38)
+        # A normal dialogue size is a ceiling, not a target to fill the balloon.
+        base = 24 if len(text.strip()) <= 2 else 26
         return max(12, int(round(min(limit, base * page_scale * font_scale))))
 
     def find_optimal_font_and_lines(
@@ -274,7 +275,12 @@ class MangaTypesettingService:
                     score = (2 * math.log(preferred / size) ** 2
                              + 0.5 * (overflow_x ** 2 + overflow_y ** 2)
                              + 2 * movement / max(original_w, original_h) ** 2)
-                    candidates.append(((score, -size, movement), result))
+                    # Prefer any readable, contained layout over overflow.
+                    # Width/height alone are insufficient: a shifted block can
+                    # leave its balloon even when its dimensions fit.
+                    outside = (bounds[0] < x1 or bounds[1] < y1
+                               or bounds[2] > x2 or bounds[3] > y2)
+                    candidates.append(((outside, score, -size, movement), result))
         if candidates:
             if not all_candidates:
                 return min(candidates, key=lambda candidate: candidate[0])[1]
@@ -495,6 +501,13 @@ class MangaTypesettingService:
             x2, y2 = min(output_img.width, box.right), min(output_img.height, box.bottom)
             if x2 <= x1 or y2 <= y1:
                 raise TypesettingError(f"Bubble #{bubble.id}: safe area is outside the image.")
+
+            # Reserve breathing room inside the chosen dialogue area. The
+            # padding setting previously existed but never affected rendering.
+            inset_x = min((x2 - x1 - 1) // 2, round((x2 - x1) * self.padding_ratio / 2))
+            inset_y = min((y2 - y1 - 1) // 2, round((y2 - y1) * self.padding_ratio / 2))
+            x1, x2 = x1 + inset_x, x2 - inset_x
+            y1, y2 = y1 + inset_y, y2 - inset_y
 
             source_count = sum(not char.isspace() for char in (bubble.text or ''))
             if source_count and bubble.text_box is not None:
