@@ -44,7 +44,7 @@ const MangaTranslationCache = {
   buildCacheKey(settings, originalSrc, pageUrl = window.location.href, imageIndex = -1) {
     const lang = (settings && settings.targetLang) || 'id';
     const translator = (settings && settings.translator) || 'google';
-    const revision = translator === 'llm' ? 'v22' : 'v18';
+    const revision = translator === 'llm' ? 'v23' : 'v19';
     const llmMode = translator === 'llm' ? [settings?.llmMergeOcr !== false ? 'combined' : 'individual'] : [];
     const direction = (settings && settings.readingDirection) || 'rtl';
     const fontScale = (settings && settings.fontScale) ?? 1.0;

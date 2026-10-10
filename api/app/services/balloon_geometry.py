@@ -31,10 +31,113 @@ def adjacent_columns(a: BoundingBox, b: BoundingBox) -> bool:
             and gap <= max(4, 0.5 * min(a.width, b.width)))
 
 
+def split_connected_balloons(text: BoundingBox, gray: np.ndarray,
+                             segmentation: np.ndarray, regions: "BalloonRegions") -> List[BoundingBox]:
+    """Separate text across a balloon neck, including diagonal connections."""
+    match = regions.match(text)
+    if match is None:
+        return [text]
+    x, y, w, h = match[2]
+    # White halos around individual letters are not balloon interiors.
+    if w < text.width * 1.08 or h < text.height * 1.05:
+        return [text]
+    mask = regions.mask(match)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contour = cv2.approxPolyDP(max(contours, key=cv2.contourArea), 2.0, True)
+    if cv2.contourArea(contour) < w * h * 0.55:
+        return [text]
+    hull = cv2.convexHull(contour, returnPoints=False)
+    if len(hull) < 4:
+        return [text]
+    try:
+        defects = cv2.convexityDefects(contour, hull)
+    except cv2.error:
+        # No reliable neck can be inferred from a self-intersecting outline.
+        return [text]
+    if defects is None:
+        return [text]
+    corners = [(contour[f, 0].astype(float), depth / 256)
+               for _, _, f, depth in defects.reshape(-1, 4)
+               if depth / 256 >= max(6, min(w, h) * 0.045)]
+    ink = ((gray[text.y:text.bottom, text.x:text.right] < 180)
+           & (segmentation[text.y:text.bottom, text.x:text.right] > 0.3))
+    yy, xx = np.nonzero(ink)
+    local_x, local_y = xx + text.x - x, yy + text.y - y
+    inside = (local_x >= 0) & (local_x < w) & (local_y >= 0) & (local_y < h)
+    inside[inside] &= mask[local_y[inside], local_x[inside]] > 0
+    # Segmentation can also mark nearby panel dots/outline strokes. They
+    # cannot belong to either dialogue when outside the enclosed balloon.
+    yy, xx = yy[inside], xx[inside]
+    if len(xx) < 80:
+        return [text]
+    points = np.column_stack((xx + text.x - x, yy + text.y - y))
+    my, mx = np.nonzero(mask)
+    area_points = np.column_stack((mx, my))
+    best, best_score = None, 0.0
+    for i, (a, depth_a) in enumerate(corners):
+        for b, depth_b in corners[i + 1:]:
+            delta = b - a
+            length = float(np.linalg.norm(delta))
+            if length < 8:
+                continue
+            normal = np.array([-delta[1], delta[0]]) / length
+            distance = (points - a) @ normal
+            # The contour corners need not lie exactly on the text gutter.
+            # Move the separator slightly within the neck to avoid punctuation.
+            shift_limit = max(3, round(min(w, h) * 0.035))
+            offset = min(range(-shift_limit, shift_limit + 1),
+                         key=lambda shift: (np.count_nonzero(np.abs(distance - shift) < 3), abs(shift)))
+            distance = distance - offset
+            # A neck must pass through blank paper, not through a column of
+            # glyphs. Require meaningful text and balloon area on both sides.
+            if np.count_nonzero(np.abs(distance) < 3) > max(2, len(xx) * 0.003):
+                continue
+            sides = [distance < 0, distance >= 0]
+            if min(np.count_nonzero(side) for side in sides) < max(40, len(xx) * 0.12):
+                continue
+            area_distance = (area_points - a) @ normal - offset
+            if min(np.count_nonzero(area_distance < 0), np.count_nonzero(area_distance >= 0)) < len(mx) * 0.18:
+                continue
+            bounds = [BoundingBox(x=text.x + int(xx[side].min()),
+                                  y=text.y + int(yy[side].min()),
+                                  width=int(np.ptp(xx[side]) + 1),
+                                  height=int(np.ptp(yy[side]) + 1)) for side in sides]
+            overlap = (max(0, min(bounds[0].right, bounds[1].right) - max(bounds[0].x, bounds[1].x))
+                       * max(0, min(bounds[0].bottom, bounds[1].bottom) - max(bounds[0].y, bounds[1].y)))
+            if overlap > min(box.area for box in bounds) * 0.12:
+                continue
+            score = min(depth_a, depth_b)
+            if score > best_score:
+                best, best_score = bounds, score
+    return best or [text]
+
+
+def refine_balloon_text(text: BoundingBox, gray: np.ndarray, segmentation: np.ndarray,
+                        direction: str, regions: "BalloonRegions") -> List[BoundingBox]:
+    parts = split_connected_balloons(text, gray, segmentation, regions)
+    if len(parts) > 1:
+        return parts
+    boxes = refine_text_boxes(text, gray, segmentation, direction)
+    if len(boxes) > 1:
+        match = regions.match(text)
+        if match is not None:
+            contours, _ = cv2.findContours(regions.mask(match), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contour = max(contours, key=cv2.contourArea)
+            hull_area = cv2.contourArea(cv2.convexHull(contour))
+            if hull_area and cv2.contourArea(contour) / hull_area >= 0.93:
+                # A compact convex balloon has no second lobe. Gaps between
+                # Japanese glyphs/short columns must not split its dialogue.
+                return [text]
+    return boxes
+
+
 def split_at_balloon_boundaries(text: BoundingBox, gray: np.ndarray,
                                 segmentation: np.ndarray) -> List[BoundingBox]:
     # A model block can span two vertically aligned balloons. Their outline
     # crosses the text column and extends into the margins, unlike a glyph.
+    if np.mean(gray[text.y:text.bottom, text.x:text.right] > 195) < 0.5:
+        # Dark artwork behind outlined lettering is not a balloon boundary.
+        return [text]
     margin = max(6, round(text.width * 0.25))
     left, right = max(0, text.x - margin), min(gray.shape[1], text.right + margin)
     ink = gray[text.y:text.bottom, left:right] < 180
@@ -287,7 +390,7 @@ def safe_layout_box(mask: np.ndarray, origin: Tuple[int, int], text: BoundingBox
 class BalloonRegions:
 
     def __init__(self, gray: np.ndarray, white_threshold: int = 195,
-                 text_boxes: Optional[List[BoundingBox]] = None):
+                 text_boxes: Optional[List[BoundingBox]] = None, *, outline_only: bool = False):
         self.gray = gray
         self.white_threshold = white_threshold
         self.h, self.w = gray.shape
@@ -301,8 +404,9 @@ class BalloonRegions:
                 pad = max(2, min(round(local_scale * 0.002), round(min(box.width, box.height) * 0.1)))
                 ink[max(0, box.y - pad):min(self.h, box.bottom + pad),
                     max(0, box.x - pad):min(self.w, box.right + pad)] = 0
-        for size in sorted({3, max(3, round(local_scale * 0.005)) | 1,
-                            max(5, round(local_scale * 0.011)) | 1}):
+        sizes = [3] if outline_only else sorted({3, max(3, round(local_scale * 0.005)) | 1,
+                                                 max(5, round(local_scale * 0.011)) | 1})
+        for size in sizes:
             closed = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((size, size), np.uint8))
             _, labels, stats, _ = cv2.connectedComponentsWithStats(1 - closed, connectivity=4)
             self.levels.append((labels, stats))

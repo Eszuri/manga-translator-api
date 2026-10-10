@@ -11,7 +11,7 @@ from app.schemas import BoundingBox, DetectedBubble
 from app.core.gpu import configure_gpu_session, verify_gpu_session
 from app.core.paths import MODEL_DIR
 from app.services.detector import BaseBubbleDetector, sort_manga_reading_order
-from app.services.balloon_geometry import refine_text_boxes
+from app.services.balloon_geometry import BalloonRegions, refine_balloon_text
 
 
 DEFAULT_MODEL_PATH = str(MODEL_DIR / "comic-text-detector.onnx")
@@ -273,9 +273,13 @@ class ComicTextDetector(BaseBubbleDetector):
         if not refine:
             return sort_manga_reading_order(detected_list, reading_direction='rtl')
         gray = np.array(image.convert('L'))
+        # Keep outlines intact here: erasing a merged text rectangle would
+        # erase the neck that distinguishes its two connected balloons.
+        outline_regions = BalloonRegions(gray, 195, outline_only=True)
         refined = []
         for bubble in detected_list:
-            for box in refine_text_boxes(bubble.text_box, gray, segmentation, bubble.direction):
+            boxes = refine_balloon_text(bubble.text_box, gray, segmentation, bubble.direction, outline_regions)
+            for box in boxes:
                 refined.append(bubble.model_copy(update={
                     'bounding_box': box, 'text_box': box,
                     'aspect_ratio': round(box.height / box.width, 2),

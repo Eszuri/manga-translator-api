@@ -9,6 +9,7 @@ from app.services.detector import BaseBubbleDetector, sort_manga_reading_order
 from app.services.comic_text_detector import ComicTextDetector
 from app.services.balloon_geometry import (
     BalloonRegions, adjacent_columns, clip_box, interior_polygon, safe_layout_box, union_boxes,
+    split_connected_balloons,
 )
 
 
@@ -33,6 +34,8 @@ class HybridBubbleDetector(BaseBubbleDetector):
         gray = np.array(image.convert('L'))
         regions = BalloonRegions(gray, self.white_threshold,
                                  [b.text_box or b.bounding_box for b in raw])
+        outline_regions = BalloonRegions(gray, self.white_threshold, outline_only=True)
+        segmentation = self.comic_detector.get_cached_segmentation(image)
         groups = []
         for bubble in raw:
             text = clip_box(bubble.text_box or bubble.bounding_box, width, height)
@@ -45,7 +48,9 @@ class HybridBubbleDetector(BaseBubbleDetector):
             for group in groups:
                 if (match is not None and group['match'] is not None
                         and match[:2] == group['match'][:2]
-                        and all(adjacent_columns(text, t) for t in group['texts'])):
+                        and all(adjacent_columns(text, t) for t in group['texts'])
+                        and (segmentation is None or len(split_connected_balloons(
+                            union_boxes([text, *group['texts']]), gray, segmentation, outline_regions)) == 1)):
                     group['texts'].append(text)
                     group['members'].append(bubble)
                     break
