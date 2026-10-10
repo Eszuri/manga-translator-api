@@ -454,7 +454,8 @@ class MangaTranslationService:
         payload = {"model": self.model, "messages": list(messages), "temperature": 0.2}
         if self._json_mode_supported:
             payload["response_format"] = {"type": "json_object"}
-        for attempt in range(2):
+        max_format_retries = 3
+        for attempt in range(max_format_retries + 1):
             response = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
             # Only retry without JSON mode when the provider explicitly rejects
             # that parameter. Authentication, quota and unrelated errors remain errors.
@@ -489,10 +490,13 @@ class MangaTranslationService:
                     f"finish_reason={choice.get('finish_reason')}, "
                     f"content_chars={len(raw_content) if isinstance(raw_content, str) else 0}"
                 )
-                if attempt:
-                    raise TranslationError(f"LLM {stage} remained invalid after one format retry ({response_details}): {exc}") from exc
-                logger.warning("[Translate] LLM %s response rejected (%s); retrying once: %s",
-                               stage, response_details, exc)
+                if attempt == max_format_retries:
+                    raise TranslationError(
+                        f"LLM {stage} remained invalid after {max_format_retries} format retries "
+                        f"({response_details}): {exc}"
+                    ) from exc
+                logger.warning("[Translate] LLM %s response rejected (%s); retry %d/%d: %s",
+                               stage, response_details, attempt + 1, max_format_retries, exc)
                 # Include the rejected answer so the endpoint can actually fix
                 # it, rather than receiving a reference to an unseen response.
                 if isinstance(raw_content, str) and raw_content.strip():
