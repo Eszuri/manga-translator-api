@@ -150,7 +150,7 @@ Selain melalui TUI, builder gambar dapat dijalankan langsung menggunakan perinta
 
 Edit file `api/.env`:
 
-Saat memilih LLM di extension, opsi **Translation Context** muncul: **All bubbles together** (default) memahami seluruh teks balon dalam satu gambar bersama, lalu menerjemahkan tiap balon dan memeriksa hasilnya; **Each bubble separately** menerjemahkan tiap balon tanpa konteks dari balon lain. Jumlah balon tidak menentukan mode. Opsi disembunyikan saat memilih Google Translate. Kedua mode LLM memakai prompt bahasa alami dan satu batas waktu per halaman termasuk retry.
+Mode **LLM** membuat draf melalui Google Translate, lalu LLM memeriksa dan memperbaikinya berdasarkan teks Jepang. **All bubbles together** (default) memeriksa seluruh balon satu halaman bersama; **Each bubble separately** memeriksa satu balon tanpa konteks balon lain. Jika tahap Google atau LLM gagal, proses gagal dan detail dicatat di server. Batas waktu per halaman mencakup draf Google, pemeriksaan LLM, dan retry. Mode Google Translate tetap menerjemahkan langsung.
 
 | Pengaturan | Fungsi |
 | --- | --- |
