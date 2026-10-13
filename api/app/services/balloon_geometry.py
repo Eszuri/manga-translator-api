@@ -59,6 +59,13 @@ def split_connected_balloons(text: BoundingBox, gray: np.ndarray,
     corners = [(contour[f, 0].astype(float), depth / 256)
                for _, _, f, depth in defects.reshape(-1, 4)
                if depth / 256 >= max(6, min(w, h) * 0.045)]
+    # A burst balloon has many deep notches around a single dialogue. Pairing
+    # arbitrary spikes creates imaginary necks through its text columns.
+    if len(corners) > 8:
+        typical_depth = float(np.median([depth for _, depth in corners]))
+        corners = [(point, depth) for point, depth in corners if depth > typical_depth * 2]
+        if len(corners) < 2:
+            return [text]
     ink = ((gray[text.y:text.bottom, text.x:text.right] < 180)
            & (segmentation[text.y:text.bottom, text.x:text.right] > 0.3))
     yy, xx = np.nonzero(ink)
@@ -159,7 +166,24 @@ def refine_balloon_text(text: BoundingBox, gray: np.ndarray, segmentation: np.nd
             else:
                 result.append(part)
         return result
-    boxes = refine_text_boxes(text, gray, segmentation, direction)
+    # Keep the whitespace fallback for genuinely lobed balloons whose neck
+    # cannot be resolved by a straight cut. It must not apply to open artwork
+    # or ordinary burst spikes.
+    match = regions.match(text)
+    allow_mask_gaps = False
+    if match is not None:
+        contours, _ = cv2.findContours(regions.mask(match), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contour = cv2.approxPolyDP(max(contours, key=cv2.contourArea), 2.0, True)
+        hull = cv2.convexHull(contour, returnPoints=False)
+        try:
+            defects = cv2.convexityDefects(contour, hull) if len(hull) >= 4 else None
+        except cv2.error:
+            defects = None
+        if defects is not None:
+            threshold = max(6, min(match[2][2:]) * 0.12)
+            allow_mask_gaps = sum(depth / 256 >= threshold
+                                  for _, _, _, depth in defects.reshape(-1, 4)) >= 2
+    boxes = refine_text_boxes(text, gray, segmentation, direction, allow_mask_gaps=allow_mask_gaps)
     if len(boxes) > 1:
         match = regions.match(text)
         if match is not None:
@@ -217,11 +241,21 @@ def split_at_balloon_boundaries(text: BoundingBox, gray: np.ndarray,
                                   width=int(xx.max() - xx.min() + 1),
                                   height=int(yy.max() - yy.min() + 1)))
         start = following
-    return result if len(result) >= 2 else [text]
+    if len(result) < 2:
+        return [text]
+    # A horizontal stroke through text may be hair, a face, or a long vowel.
+    # Require separate enclosed interiors on either side of a claimed outline.
+    regions = BalloonRegions(gray, 195, outline_only=True)
+    matches = [regions.match(part) for part in result]
+    if any(match is None for match in matches):
+        return [text]
+    if len({match[:2] for match in matches}) != len(result):
+        return [text]
+    return result
 
 
 def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndarray,
-                      direction: str) -> List[BoundingBox]:
+                      direction: str, *, allow_mask_gaps: bool = False) -> List[BoundingBox]:
     parts = split_at_balloon_boundaries(text, gray, segmentation)
     if len(parts) > 1:
         return [box for part in parts
@@ -259,6 +293,13 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
         clean[labels == i] = 1
     if np.count_nonzero(clean) < 12:
         return [original]
+    # Outline-guided balloon separation has already run. A text mask with
+    # missing strokes is not evidence of a gap between dialogues: inverted
+    # lettering and short columns otherwise get cut into unrelated fragments.
+    # Also retain the original envelope if component filtering removed ink.
+    oy, ox = original.y - text.y, original.x - text.x
+    retained = clean[oy:oy + original.height, ox:ox + original.width]
+    unsafe_tightening = incomplete_support or (ink_count and np.count_nonzero(retained) < ink_count * 0.9)
     if direction != 'vertical':
         if incomplete_support:
             return [original]
@@ -272,11 +313,16 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
     # incomplete-mask guard: that guard must not preserve a merged model box.
     candidates = []
     for axis in (0, 1):
+        if axis == 1 and unsafe_tightening and not allow_mask_gaps:
+            continue
         projection = clean.sum(axis=axis)
         quiet = projection <= 2
         edges = np.flatnonzero(np.diff(np.r_[False, quiet, False]))
         for start, stop in zip(edges[::2], edges[1::2]):
             if stop - start < char_height * (1.2 if axis == 0 else 1.5):
+                continue
+            gap_ink = patch[:, start:stop] if axis == 0 else patch[start:stop, :]
+            if axis == 1 and not allow_mask_gaps and np.count_nonzero(gap_ink < 180) > 2:
                 continue
             parts = (clean[:, :start], clean[:, stop:]) if axis == 0 else (clean[:start], clean[stop:])
             if min(part.sum() for part in parts) < max(40, clean.sum() * 0.08):
@@ -295,6 +341,9 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
     if candidates:
         return max(candidates, key=lambda item: item[0])[1]
 
+    if unsafe_tightening and not allow_mask_gaps:
+        return [original]
+
     row_ink = clean.sum(axis=1)
     quiet = row_ink <= max(2, round(text.width * 0.015))
     edges = np.flatnonzero(np.diff(np.r_[False, quiet, False]))
@@ -302,6 +351,8 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
     best_score = 0.0
     for start, stop in zip(edges[::2], edges[1::2]):
         if stop - start < max(8, char_height * 0.45):
+            continue
+        if not allow_mask_gaps and np.count_nonzero(patch[start:stop] < 180) > 2:
             continue
         before, after = clean[:start], clean[stop:]
         if min(before.sum(), after.sum()) < max(50, clean.sum() * 0.12):
@@ -377,6 +428,13 @@ def refine_text_boxes(text: BoundingBox, gray: np.ndarray, segmentation: np.ndar
         nearest = min(range(len(large)), key=lambda i: (large[i].center_x - small.center_x) ** 2
                       + (large[i].center_y - small.center_y) ** 2)
         large[nearest] = union_boxes([large[nearest], small])
+    coverage = np.zeros_like(clean)
+    for box in large:
+        coverage[box.y - text.y:box.bottom - text.y,
+                 box.x - text.x:box.right - text.x] = 1
+    covered_original = coverage[oy:oy + original.height, ox:ox + original.width]
+    if not allow_mask_gaps and np.count_nonzero(original_ink & (covered_original == 0)) > max(2, ink_count * 0.02):
+        return [original]
     return large
 
 

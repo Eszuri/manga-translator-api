@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import os
 import sys
 import time
@@ -46,6 +47,7 @@ def parse_args():
     parser.add_argument("--target-lang", choices=("id", "en"), default="id")
     parser.add_argument("--translator", choices=("google", "llm"), default="google")
     parser.add_argument("--font-scale", type=float, default=1.0)
+    parser.add_argument("--ocr-only", action="store_true", help="Save detection and OCR evidence without translation requests")
     return parser.parse_args()
 
 
@@ -172,6 +174,13 @@ def process_page(path: Path, output_dir: Path, detector, ocr, translator,
     ocr.recognize_all_bubbles(image, bubbles, padding=6)
     timings["ocr_ms"] = round((time.perf_counter() - start) * 1000)
     transcript_image(image, bubbles, "OCR - Japanese text", False).save(outputs["ocr"])
+    outputs["ocr"].with_suffix('.json').write_text(json.dumps({
+        'source': str(path.resolve()), 'image_size': image.size,
+        'bubbles': [bubble.model_dump() for bubble in bubbles],
+    }, ensure_ascii=False, indent=2), encoding='utf-8')
+    if args.ocr_only:
+        return {"image": path.name, "status": "ok", "detected": len(bubbles),
+                "translated": 0, "timings": timings}
 
     start = time.perf_counter()
     candidates = [b for b in bubbles if (b.text or "").strip() and not is_graphic_text(b.text)]
@@ -203,13 +212,13 @@ def main() -> int:
     for folder in STAGE_FOLDERS.values():
         (output_dir / folder).mkdir(parents=True, exist_ok=True)
 
-    print(f"Pages: {len(images)} | device: gpu | translation: {args.translator.upper()}")
+    print(f"Pages: {len(images)} | device: gpu | translation: {'OFF (OCR only)' if args.ocr_only else args.translator.upper()}")
     print(f"Output: {output_dir}")
     detector = make_detector()
     ocr = MangaOcrService()
-    translator = get_translation_service()
-    inpainter = MangaInpaintingService()
-    typesetter = MangaTypesettingService()
+    translator = None if args.ocr_only else get_translation_service()
+    inpainter = None if args.ocr_only else MangaInpaintingService()
+    typesetter = None if args.ocr_only else MangaTypesettingService()
 
     results = []
     for index, path in enumerate(images, 1):
@@ -217,7 +226,10 @@ def main() -> int:
         try:
             result = process_page(path, output_dir, detector, ocr, translator,
                                   inpainter, typesetter, args)
-            print(f"    box={result['detected']} rendered={result['translated']}", flush=True)
+            if args.ocr_only:
+                print(f"    box={result['detected']} OCR complete", flush=True)
+            else:
+                print(f"    box={result['detected']} rendered={result['translated']}", flush=True)
         except Exception as exc:
             result = {"image": path.name, "status": "failed", "error": str(exc)}
             print(f"    FAILED: {exc}", file=sys.stderr, flush=True)
